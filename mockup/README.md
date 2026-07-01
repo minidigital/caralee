@@ -23,7 +23,11 @@ Open http://localhost:8080
 ## Features
 
 - Original Caralee logo preserved (`logo.jpg`)
-- Logo blue (`#094b7d`) and red (`#e32129`) brand colours
+- 2026 refresh influenced by Medtronic's brand: bold headlines, expressive
+  blue gradients, layered/glass surfaces, and a geometric sans typeface
+- Deep indigo (`#170f5f`) + electric blue (`#2b2bff`) gradient system, with the
+  Caralee red (`#e32129`) preserved as an accent
+- Sora (display) + Inter (body) typography
 - Mobile-responsive navigation
 - Google Maps embed with directions link
 - Real practice content: services, fees, contact, policies
