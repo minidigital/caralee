@@ -4,17 +4,21 @@ Interactive preview site for [caraleemg.com.au](https://caraleemg.com.au).
 
 ## Live preview
 
-**https://minidigital.github.io/caralee/**
+### Option A — GitHub Pages (recommended, permanent)
 
-(Open after GitHub Pages deploy completes — usually 1–2 minutes after push to `main`.)
+1. In the repo go to **Settings → Pages → Build and deployment**
+2. Set **Source** to **GitHub Actions**
+3. Re-run the **Deploy preview site to GitHub Pages** workflow
 
-## Run locally
+Site URL: **https://minidigital.github.io/caralee/**
+
+### Option B — Run locally
 
 ```bash
 cd mockup && python3 -m http.server 8080
 ```
 
-Then open http://localhost:8080
+Open http://localhost:8080
 
 ## Features
 
