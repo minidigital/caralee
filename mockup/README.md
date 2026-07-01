@@ -14,7 +14,7 @@ Then visit http://localhost:8080
 
 ## Design direction
 
-- **Trust-first healthcare aesthetic** — teal/sage palette, warm cream backgrounds, clear typography
+- **Brand-aligned palette** — logo blue (`#094b7d`) and red (`#e32129`), warm cream backgrounds, clear typography
 - **Mobile-responsive** — sticky header, collapsible nav, stacked layouts on small screens
 - **Patient-focused CTAs** — prominent booking and phone buttons throughout
 - **Content preserved** — all real practice info (hours, fees, services, contact) from the live site
