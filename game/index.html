@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Frenchie Quest — 8-Bit Adventure</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="arcade">
+    <header class="cabinet-top">
+      <span class="marquee">★ FRENCHIE QUEST ★ BARK TO THE BEAT ★ COLLECT BONES ★ DEFEAT CATS ★</span>
+    </header>
+    <div class="screen-bezel">
+      <canvas id="game" width="320" height="180"></canvas>
+      <div id="scanlines" aria-hidden="true"></div>
+    </div>
+    <footer class="cabinet-bottom">
+      <div class="controls-hint">
+        <kbd>←</kbd><kbd>→</kbd> Move &nbsp;·&nbsp; <kbd>Space</kbd> / <kbd>Z</kbd> Jump &nbsp;·&nbsp; <kbd>Enter</kbd> Start
+      </div>
+    </footer>
+  </div>
+  <script src="game.js"></script>
+</body>
+</html>
