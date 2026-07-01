@@ -3,19 +3,23 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Caralee Medical Group — Revamped Mockup</title>
+  <title>Caralee Medical Group | General Practitioner — Willagee WA</title>
+  <link rel="icon" href="https://static.wixstatic.com/media/5c74da_e5792b339d1041f39de2ff502dbc7711%7Emv2.jpg/v1/fill/w_32%2Ch_32%2Clg_1%2Cusm_0.66_1.00_0.01/5c74da_e5792b339d1041f39de2ff502dbc7711%7Emv2.jpg" type="image/jpeg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div class="mockup-banner">Design mockup — not the live site</div>
+  <div class="mockup-banner" id="preview-banner">
+    <span>Website preview — authorised redesign for Caralee Medical Group</span>
+    <button type="button" id="dismiss-banner" aria-label="Dismiss banner">✕</button>
+  </div>
 
   <header class="site-header">
     <div class="container header-inner">
       <a href="#" class="logo">
-        <img src="logo.jpg" alt="Caralee Medical Group" class="logo-img" width="140" height="56">
+        <img src="logo.jpg" alt="Caralee Medical Group" class="logo-img" width="283" height="342">
       </a>
       <button class="nav-toggle" aria-label="Open menu" aria-expanded="false">
         <span></span><span></span><span></span>
@@ -266,11 +270,43 @@
             <p>NightDoctor locum service: <a href="tel:1300644483">1300 644 483</a></p>
           </div>
         </div>
-        <div class="map-placeholder">
-          <div class="map-inner">
-            <span>📍</span>
-            <p>Interactive map<br><small>Ground floor, next to IGA Willagee</small></p>
-          </div>
+        <div class="map-embed">
+          <iframe
+            title="Caralee Medical Group location map"
+            src="https://maps.google.com/maps?q=2%2F62+Archibald+Street+Willagee+WA+6156&output=embed"
+            loading="lazy"
+            referrerpolicy="no-referrer-when-downgrade"
+            allowfullscreen>
+          </iframe>
+          <a class="map-link" href="https://www.google.com/maps/dir/?api=1&destination=2%2F62+Archibald+Street+Willagee+WA+6156" target="_blank" rel="noopener">Get directions →</a>
+        </div>
+      </div>
+    </section>
+
+    <section id="policies" class="policies">
+      <div class="container">
+        <div class="section-header centered">
+          <span class="section-label">Practice information</span>
+          <h2>Policies</h2>
+          <p>Important information about appointments, privacy, and your care at Caralee Medical Group.</p>
+        </div>
+        <div class="policies-grid">
+          <article class="policy-card">
+            <h3>Appointments &amp; cancellations</h3>
+            <p>Please arrive on time for your appointment. A $30 fee applies for cancellations within 3 hours of your booked time, or for non-attendance.</p>
+          </article>
+          <article class="policy-card">
+            <h3>Bulk billing eligibility</h3>
+            <p>Bulk billing is available for children 15 and under, pension and health care card holders, Commonwealth Seniors Health Card holders, and DVA card holders.</p>
+          </article>
+          <article class="policy-card">
+            <h3>Privacy</h3>
+            <p>Your personal health information is handled in accordance with Australian privacy legislation and medical practice standards.</p>
+          </article>
+          <article class="policy-card">
+            <h3>MyMedicare</h3>
+            <p>We encourage patients to register for MyMedicare. Ask our reception team or scan the QR code when you visit.</p>
+          </article>
         </div>
       </div>
     </section>
@@ -279,8 +315,11 @@
   <footer class="site-footer">
     <div class="container footer-grid">
       <div class="footer-brand">
-        <strong>Caralee Medical Group</strong>
-        <p>General practice · Willagee, Western Australia</p>
+        <img src="logo.jpg" alt="" class="footer-logo" width="120" height="145">
+        <div>
+          <strong>Caralee Medical Group</strong>
+          <p>General practice · Willagee, Western Australia</p>
+        </div>
       </div>
       <nav class="footer-nav">
         <a href="#services">Services</a>
@@ -288,7 +327,7 @@
         <a href="#contact">Contact</a>
         <a href="#policies">Policies</a>
       </nav>
-      <p class="footer-copy">© 2026 Caralee Medical Group. Design mockup.</p>
+      <p class="footer-copy">© 2026 Caralee Medical Group. All rights reserved.</p>
     </div>
   </footer>
 

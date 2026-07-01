@@ -1,3 +1,12 @@
+document.getElementById('dismiss-banner')?.addEventListener('click', () => {
+  document.getElementById('preview-banner')?.classList.add('hidden');
+  localStorage.setItem('caralee-banner-dismissed', '1');
+});
+
+if (localStorage.getItem('caralee-banner-dismissed')) {
+  document.getElementById('preview-banner')?.classList.add('hidden');
+}
+
 const toggle = document.querySelector('.nav-toggle');
 const nav = document.querySelector('.main-nav');
 const cta = document.querySelector('.header-cta');
