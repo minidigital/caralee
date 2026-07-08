@@ -2,9 +2,9 @@
 
 Scrapes **EAN** (European Article Number) codes for **Renogy**-branded products listed on Amazon.
 
-Uses [Playwright](https://playwright.dev/python/) to load Amazon search results and product pages, then extracts barcodes from the product details section (EAN, GTIN, or UPC).
+**Default source:** [Renogy brand store](https://www.amazon.com.au/stores/Renogy/page/027078F8-DAAC-4849-888A-CDFBA339F29E) on Amazon Australia. The store page lists far more products than Amazon search (100+ vs ~9).
 
-**Default marketplace:** [Amazon Australia](https://www.amazon.com.au) (`amazon.com.au`) for Australian product listings and ASINs.
+Uses [Playwright](https://playwright.dev/python/) to crawl the Renogy store and product pages, then extracts barcodes from product details (EAN, GTIN, or UPC).
 
 ## Requirements
 
@@ -39,6 +39,9 @@ Common options:
 | `--max-products` | `0` | Cap number of products (0 = all found) |
 | `--delay` | `2.0` | Seconds between page loads |
 | `--output` | `renogy_eans_au.json` | Output path (`.json` or `.csv`) |
+| `--use-search` | — | Use Amazon search instead of the Renogy brand store |
+| `--store-url` | AU Renogy store | Brand store URL to crawl |
+| `--max-store-pages` | `25` | Brand store sub-pages to crawl |
 | `--no-brand-filter` | — | Skip Amazon brand filter (`p_4:Renogy`) on search |
 | `--asin` | — | Scrape specific ASIN(s) instead of searching |
 | `--headed` | — | Show the browser window (debugging) |
@@ -79,7 +82,7 @@ Each record includes:
 
 ## Notes
 
-- Australian listings often use different ASINs and pricing than Amazon US. Scrape `amazon.com.au` directly to get AU product variants.
+- The Renogy brand store on amazon.com.au is the recommended source for AU listings. Amazon search only returns ~9 Renogy products; the store has 100+.
 - Amazon may block or throttle automated access. The scraper retries blocked pages and uses realistic browser settings; increase `--delay` if you see captchas or empty results.
 - Not every listing exposes an EAN on the product page; some only show UPC (converted to EAN when possible).
 - Respect [Amazon's Terms of Service](https://www.amazon.com.au/gp/help/customer/display.html) and applicable robots policies for your use case.

@@ -1,0 +1,35 @@
+Marketplace: https://www.amazon.com.au
+Output: renogy_eans_au.csv
+Searching page 1: https://www.amazon.com.au/s?k=Renogy&page=1&rh=p_4%3ARenogy
+  Found 9 Renogy products on page 1
+Searching page 2: https://www.amazon.com.au/s?k=Renogy&page=2&rh=p_4%3ARenogy
+  Found 0 Renogy products on page 2
+Scraping 9 product(s)...
+[1/9] Scraping B07V8RJLHL: Battery Monitor Voltmeter & Ammeter Black
+  EAN: 0810009713197
+  Model: RBM500-G1-JP-FBA
+[2/9] Scraping B0C3VRVSKF: 12V 50A DCC MPPT Running Charger with Lifepo4 Built-in Solar Charging 
+  EAN: 0840315211247
+  Model: 12V 50A DC-DC バッテリー充電器
+[3/9] Scraping B0BRSLB7KD: PWM Multi-Functional Solar Charge Controller, 10A, 12V 24V, USB 5V Out
+  EAN: 0810009711629
+  Model: RNG-CTRL-WND10
+[4/9] Scraping B0833MDNHJ: 20A MPPT Charge Controller Set (with BT2 Module), LCD Screen Included,
+  EAN: 0810009714217
+  Model: RNG-CTRL-RVR20-BT-JP-FBA
+[5/9] Scraping B07MMQ25VX: Solar Panel Mount (Multi-Mount) for Large Solar Power Generation
+  EAN: 0810009710929
+  Model: RNG-MTS-TM100-JP-FBA
+[6/9] Scraping B0FXF551ZK: Solar Panels, E.Flex 30W Portable Foldable Solar Panel Charger, Quick 
+  EAN: 0840315250468
+  Model: RPP200EF-SE
+[7/9] Scraping B00YG1DY20: 10A Male and Female Connector Waterproof in-Line Fuse Holder, Black
+  Warning: EAN not found
+  Model: 10A
+[8/9] Scraping B08Z38YDCK: 30A MPPT Charge Controller with Bluetooth, 30 Amp 12V/24V MPPT Solar C
+  EAN: 0810009718703
+  Model: RNG-CTRL-RVR30-BT
+[9/9] Scraping B09WYB8XH7: Tech EDC(Multi-tool) cable
+  EAN: 0810081409025
+  Model: RET-0MC01
+Done. 8/9 products have an EAN. Wrote renogy_eans_au.csv

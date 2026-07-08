@@ -12,7 +12,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import urljoin, urlencode, urlparse
 
 from bs4 import BeautifulSoup
 from playwright.sync_api import Browser, Page, sync_playwright
@@ -55,7 +55,12 @@ DEFAULT_MARKETPLACE_SETTINGS: dict[str, str | dict[str, float]] = {
     "geolocation": {"longitude": 0.0, "latitude": 0.0},
 }
 
+DEFAULT_AU_RENOGY_STORE = (
+    "https://www.amazon.com.au/stores/Renogy/page/"
+    "027078F8-DAAC-4849-888A-CDFBA339F29E"
+)
 ASIN_PATTERN = re.compile(r"/(?:dp|gp/product)/([A-Z0-9]{10})")
+STORE_PAGE_PATTERN = re.compile(r"/stores/(?:[^/]+/)?page/[0-9A-F-]{36}", re.IGNORECASE)
 EAN_PATTERN = re.compile(r"\b(\d{13})\b")
 UPC_TO_EAN_PATTERN = re.compile(r"\b0?(\d{12})\b")
 
@@ -452,6 +457,100 @@ def fetch_page_html(page: Page, url: str, delay: float, retries: int = 3) -> str
     return last_html
 
 
+def normalize_store_page_url(base_url: str, href: str) -> str | None:
+    if not href:
+        return None
+    absolute = urljoin(base_url, href)
+    parsed = urlparse(absolute)
+    if parsed.netloc and parsed.netloc not in urlparse(base_url).netloc:
+        return None
+    match = STORE_PAGE_PATTERN.search(parsed.path)
+    if not match:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}{match.group(0)}"
+
+
+def parse_store_page(html: str, base_url: str) -> tuple[list[dict[str, str]], set[str]]:
+    soup = BeautifulSoup(html, "html.parser")
+    asins: set[str] = set()
+    titles: dict[str, str] = {}
+
+    for match in ASIN_PATTERN.finditer(html):
+        asins.add(match.group(1))
+
+    for item in soup.select('[data-csa-c-item-type="asin"]'):
+        item_id = item.get("data-csa-c-item-id", "")
+        asin_match = re.search(r"amzn1\.asin\.([A-Z0-9]{10})", item_id)
+        if not asin_match:
+            continue
+        asin = asin_match.group(1)
+        asins.add(asin)
+        title_el = item.select_one(
+            "[data-testid='product-grid-title'], .ProductGridItem__title__n6e8q, .a-truncate-full"
+        )
+        if title_el:
+            titles[asin] = normalize_whitespace(title_el.get_text())
+
+    subpages: set[str] = set()
+    for link in soup.select('a[href*="/stores/page/"]'):
+        normalized = normalize_store_page_url(base_url, link.get("href", ""))
+        if normalized:
+            subpages.add(normalized)
+
+    results = [
+        {
+            "asin": asin,
+            "title": titles.get(asin, ""),
+            "brand": "Renogy",
+            "url": f"{base_url}/dp/{asin}",
+        }
+        for asin in sorted(asins)
+    ]
+    return results, subpages
+
+
+def scrape_store_pages(
+    page: Page,
+    base_url: str,
+    store_url: str,
+    delay: float,
+    max_store_pages: int,
+) -> list[dict[str, str]]:
+    queue: list[str] = [store_url]
+    visited_pages: set[str] = set()
+    seen_asins: set[str] = set()
+    all_results: list[dict[str, str]] = []
+
+    while queue and len(visited_pages) < max_store_pages:
+        current_url = queue.pop(0)
+        normalized_current = normalize_store_page_url(base_url, current_url) or current_url
+        if normalized_current in visited_pages:
+            continue
+        visited_pages.add(normalized_current)
+
+        print(f"Store page {len(visited_pages)}/{max_store_pages}: {normalized_current}", file=sys.stderr)
+        html = fetch_page_html(page, normalized_current, delay)
+        page_results, subpages = parse_store_page(html, base_url)
+
+        new_items = [item for item in page_results if item["asin"] not in seen_asins]
+        for item in new_items:
+            seen_asins.add(item["asin"])
+        all_results.extend(new_items)
+
+        print(
+            f"  Found {len(new_items)} products ({len(all_results)} total unique ASINs)",
+            file=sys.stderr,
+        )
+
+        for subpage in sorted(subpages):
+            if subpage not in visited_pages and subpage not in queue:
+                queue.append(subpage)
+
+        time.sleep(delay)
+
+    return all_results
+
+
 def scrape_search_pages(
     page: Page,
     base_url: str,
@@ -638,6 +737,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Run browser in headed mode (useful for debugging).",
     )
     parser.add_argument(
+        "--use-search",
+        action="store_true",
+        help="Use Amazon search instead of the Renogy brand store page.",
+    )
+    parser.add_argument(
+        "--store-url",
+        default=None,
+        help=(
+            "Scrape products from an Amazon brand store URL instead of search. "
+            f"AU default: {DEFAULT_AU_RENOGY_STORE}"
+        ),
+    )
+    parser.add_argument(
+        "--max-store-pages",
+        type=int,
+        default=25,
+        help="Maximum brand store sub-pages to crawl (default: 25).",
+    )
+    parser.add_argument(
         "--asin",
         action="append",
         default=[],
@@ -651,7 +769,13 @@ def main(argv: list[str] | None = None) -> int:
     base_url = args.base_url or DEFAULT_MARKETPLACES[args.marketplace]
     headless = not args.headed
 
+    store_url = args.store_url
+    if store_url is None and args.marketplace == "au" and not args.asin and not args.use_search:
+        store_url = DEFAULT_AU_RENOGY_STORE
+
     print(f"Marketplace: {base_url}", file=sys.stderr)
+    if store_url and not args.asin:
+        print(f"Store: {store_url}", file=sys.stderr)
     print(f"Output: {args.output}", file=sys.stderr)
 
     with sync_playwright() as playwright:
@@ -665,6 +789,17 @@ def main(argv: list[str] | None = None) -> int:
                 {"asin": asin, "title": "", "brand": "Renogy", "url": f"{base_url}/dp/{asin}"}
                 for asin in args.asin
             ]
+        elif store_url:
+            context = create_browser_context(browser, marketplace=args.marketplace)
+            page = context.new_page()
+            search_hits = scrape_store_pages(
+                page=page,
+                base_url=base_url,
+                store_url=store_url,
+                delay=args.delay,
+                max_store_pages=args.max_store_pages,
+            )
+            context.close()
         else:
             context = create_browser_context(browser, marketplace=args.marketplace)
             page = context.new_page()
