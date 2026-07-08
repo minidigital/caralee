@@ -481,7 +481,7 @@ def scrape_search_pages(
         page_results = parse_search_results(
             html,
             base_url,
-            require_renogy_in_listing=brand_filter is None,
+            require_renogy_in_listing=False,
         )
         new_items = [item for item in page_results if item["asin"] not in seen_asins]
         for item in new_items:
