@@ -69,8 +69,9 @@ Each record includes:
 - `title` — Product title
 - `brand` — Brand name
 - `ean` — Best available 13-digit EAN (derived from EAN/GTIN/UPC when needed)
+- `model_number` — Manufacturer model / part number from product details
 - `upc`, `gtin` — Raw identifiers when present
-- `model_number`, `price`, `url`
+- `price`, `url`
 - `scrape_error` — Set when a product could not be fully scraped
 
 ## Notes

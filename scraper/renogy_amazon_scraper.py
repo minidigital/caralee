@@ -49,12 +49,22 @@ class ProductRecord:
     brand: str
     url: str
     ean: str | None = None
+    model_number: str | None = None
     upc: str | None = None
     gtin: str | None = None
     price: str | None = None
-    model_number: str | None = None
     identifiers: dict[str, str] = field(default_factory=dict)
     scrape_error: str | None = None
+
+
+MODEL_NUMBER_KEYS = (
+    "item model number",
+    "model number",
+    "model name",
+    "manufacturer part number",
+    "part number",
+    "mpn",
+)
 
 
 def normalize_whitespace(value: str) -> str:
@@ -235,6 +245,26 @@ def extract_identifiers_from_pairs(pairs: dict[str, str]) -> dict[str, str]:
     return identifiers
 
 
+def extract_model_number(pairs: dict[str, str], soup: BeautifulSoup) -> str | None:
+    for key in MODEL_NUMBER_KEYS:
+        value = pairs.get(key)
+        if value:
+            return value
+
+    for selector in (
+        "tr.po-model_number span.po-break-word",
+        "#productOverview_feature_div tr.po-model_number td",
+        "span.po-model_number .po-break-word",
+    ):
+        element = soup.select_one(selector)
+        if element:
+            value = normalize_whitespace(element.get_text())
+            if value:
+                return value
+
+    return None
+
+
 def extract_product_record(
     html: str,
     asin: str,
@@ -273,7 +303,7 @@ def extract_product_record(
         brand=brand,
         url=url,
         price=price,
-        model_number=pairs.get("item model number") or pairs.get("model number"),
+        model_number=extract_model_number(pairs, soup),
         identifiers=identifiers,
         ean=identifiers.get("ean"),
         upc=identifiers.get("upc"),
@@ -465,6 +495,9 @@ def scrape_products(
             else:
                 print(f"  EAN: {record.ean}", file=sys.stderr)
 
+            if record.model_number:
+                print(f"  Model: {record.model_number}", file=sys.stderr)
+
             records.append(record)
         except Exception as exc:
             print(f"  Error: {exc}", file=sys.stderr)
@@ -495,9 +528,9 @@ def write_csv(path: Path, records: list[ProductRecord]) -> None:
         "title",
         "brand",
         "ean",
+        "model_number",
         "upc",
         "gtin",
-        "model_number",
         "price",
         "url",
         "scrape_error",
