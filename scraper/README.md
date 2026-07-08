@@ -75,7 +75,7 @@ Each record includes:
 
 ## Notes
 
-- Amazon may block or throttle automated access. Increase `--delay` if you see captchas or empty results.
+- Amazon may block or throttle automated access. The scraper retries blocked pages and uses realistic browser settings; increase `--delay` if you see captchas or empty results.
 - Not every listing exposes an EAN on the product page; some only show UPC (converted to EAN when possible).
 - Respect [Amazon's Terms of Service](https://www.amazon.com/gp/help/customer/display.html) and applicable robots policies for your use case.
 - For production or high-volume catalog sync, consider the [Amazon Product Advertising API](https://webservices.amazon.com/paapi5/documentation/) or a licensed data provider.
