@@ -18,6 +18,7 @@ from bs4 import BeautifulSoup
 from playwright.sync_api import Browser, Page, sync_playwright
 
 DEFAULT_MARKETPLACES: dict[str, str] = {
+    "au": "https://www.amazon.com.au",
     "us": "https://www.amazon.com",
     "uk": "https://www.amazon.co.uk",
     "de": "https://www.amazon.de",
@@ -25,7 +26,33 @@ DEFAULT_MARKETPLACES: dict[str, str] = {
     "it": "https://www.amazon.it",
     "es": "https://www.amazon.es",
     "ca": "https://www.amazon.ca",
-    "au": "https://www.amazon.com.au",
+}
+
+MARKETPLACE_SETTINGS: dict[str, dict[str, str | dict[str, float]]] = {
+    "au": {
+        "locale": "en-AU",
+        "timezone_id": "Australia/Sydney",
+        "accept_language": "en-AU,en;q=0.9",
+        "geolocation": {"longitude": 151.2093, "latitude": -33.8688},
+    },
+    "us": {
+        "locale": "en-US",
+        "timezone_id": "America/New_York",
+        "accept_language": "en-US,en;q=0.9",
+        "geolocation": {"longitude": -74.006, "latitude": 40.7128},
+    },
+    "uk": {
+        "locale": "en-GB",
+        "timezone_id": "Europe/London",
+        "accept_language": "en-GB,en;q=0.9",
+        "geolocation": {"longitude": -0.1276, "latitude": 51.5074},
+    },
+}
+DEFAULT_MARKETPLACE_SETTINGS: dict[str, str | dict[str, float]] = {
+    "locale": "en-US",
+    "timezone_id": "UTC",
+    "accept_language": "en-US,en;q=0.9",
+    "geolocation": {"longitude": 0.0, "latitude": 0.0},
 }
 
 ASIN_PATTERN = re.compile(r"/(?:dp|gp/product)/([A-Z0-9]{10})")
@@ -48,6 +75,7 @@ class ProductRecord:
     title: str
     brand: str
     url: str
+    marketplace: str
     ean: str | None = None
     model_number: str | None = None
     upc: str | None = None
@@ -269,6 +297,7 @@ def extract_product_record(
     html: str,
     asin: str,
     url: str,
+    marketplace: str,
     search_title: str = "",
     search_brand: str = "",
 ) -> ProductRecord:
@@ -302,6 +331,7 @@ def extract_product_record(
         title=title,
         brand=brand,
         url=url,
+        marketplace=marketplace,
         price=price,
         model_number=extract_model_number(pairs, soup),
         identifiers=identifiers,
@@ -354,17 +384,24 @@ BROWSER_ARGS = [
 ]
 
 
-def create_browser_context(browser: Browser):
+def create_browser_context(browser: Browser, marketplace: str = "au"):
+    settings = {**DEFAULT_MARKETPLACE_SETTINGS, **MARKETPLACE_SETTINGS.get(marketplace, {})}
+    geolocation = settings["geolocation"]
+    if not isinstance(geolocation, dict):
+        geolocation = {"longitude": 0.0, "latitude": 0.0}
+
     context = browser.new_context(
-        locale="en-US",
-        timezone_id="America/New_York",
+        locale=str(settings["locale"]),
+        timezone_id=str(settings["timezone_id"]),
+        geolocation=geolocation,
+        permissions=["geolocation"],
         user_agent=(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         ),
         viewport={"width": 1366, "height": 900},
         extra_http_headers={
-            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Language": str(settings["accept_language"]),
             "Accept": (
                 "text/html,application/xhtml+xml,application/xml;q=0.9,"
                 "image/avif,image/webp,*/*;q=0.8"
@@ -462,11 +499,12 @@ def scrape_search_pages(
 def scrape_products(
     browser: Browser,
     base_url: str,
+    marketplace: str,
     search_hits: list[dict[str, str]],
     delay: float,
     headless: bool,
 ) -> list[ProductRecord]:
-    context = create_browser_context(browser)
+    context = create_browser_context(browser, marketplace=marketplace)
     page = context.new_page()
     records: list[ProductRecord] = []
 
@@ -481,6 +519,7 @@ def scrape_products(
                 html,
                 asin=asin,
                 url=product_url,
+                marketplace=marketplace,
                 search_title=hit.get("title", ""),
                 search_brand=hit.get("brand", ""),
             )
@@ -507,6 +546,7 @@ def scrape_products(
                     title=hit.get("title", ""),
                     brand=hit.get("brand", ""),
                     url=product_url,
+                    marketplace=marketplace,
                     scrape_error=str(exc),
                 )
             )
@@ -527,6 +567,7 @@ def write_csv(path: Path, records: list[ProductRecord]) -> None:
         "asin",
         "title",
         "brand",
+        "marketplace",
         "ean",
         "model_number",
         "upc",
@@ -549,8 +590,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--marketplace",
         choices=sorted(DEFAULT_MARKETPLACES),
-        default="us",
-        help="Amazon marketplace to scrape (default: us).",
+        default="au",
+        help="Amazon marketplace to scrape (default: au / amazon.com.au).",
     )
     parser.add_argument(
         "--base-url",
@@ -583,7 +624,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("renogy_eans.json"),
+        default=Path("renogy_eans_au.json"),
         help="Output file path (.json or .csv).",
     )
     parser.add_argument(
@@ -625,7 +666,7 @@ def main(argv: list[str] | None = None) -> int:
                 for asin in args.asin
             ]
         else:
-            context = create_browser_context(browser)
+            context = create_browser_context(browser, marketplace=args.marketplace)
             page = context.new_page()
             search_hits = scrape_search_pages(
                 page=page,
@@ -644,6 +685,7 @@ def main(argv: list[str] | None = None) -> int:
         records = scrape_products(
             browser=browser,
             base_url=base_url,
+            marketplace=args.marketplace,
             search_hits=search_hits,
             delay=args.delay,
             headless=headless,
