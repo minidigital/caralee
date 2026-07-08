@@ -3,3 +3,5 @@ __pycache__/
 *.pyc
 test_output.json
 debug_*.html
+renogy_eans_au*.csv
+scrape_*.log
