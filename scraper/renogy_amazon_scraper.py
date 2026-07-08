@@ -71,7 +71,15 @@ IDENTIFIER_LABELS = (
     "european article number",
     "upc",
     "universal product code",
+    "barcode",
 )
+
+GTIN_TABLE_PATTERN = re.compile(
+    r"<th[^>]*>\s*([^<]*(?:UPC|EAN|GTIN|Global Trade|Universal Product|European Article|Barcode)[^<]*)</th>\s*"
+    r"<td[^>]*>\s*([^<]+)",
+    re.IGNORECASE,
+)
+BARCODE_VALUE_PATTERN = re.compile(r"\d{12,14}")
 
 
 @dataclass
@@ -110,31 +118,94 @@ def asin_from_url(url: str) -> str | None:
 
 
 def upc_to_ean(upc: str) -> str | None:
-    digits = re.sub(r"\D", "", upc)
+    return normalize_barcode_to_ean(re.sub(r"\D", "", upc))
+
+
+def split_barcode_values(value: str) -> list[str]:
+    values: list[str] = []
+    for chunk in re.split(r"[,;/]+", value):
+        for match in BARCODE_VALUE_PATTERN.findall(chunk):
+            values.append(match)
+    return values
+
+
+def normalize_barcode_to_ean(digits: str) -> str | None:
+    digits = re.sub(r"\D", "", digits)
+    if not digits:
+        return None
+    if len(digits) == 14 and digits.startswith("0"):
+        digits = digits[1:]
+    if len(digits) == 13:
+        if digits.startswith("978") or digits.startswith("979"):
+            return None
+        return digits
     if len(digits) == 12:
         return f"0{digits}"
-    if len(digits) == 13:
-        return digits
+    if len(digits) == 14:
+        return digits[-13:]
     return None
+
+
+def classify_barcode(digits: str) -> tuple[str | None, str | None, str | None]:
+    clean = re.sub(r"\D", "", digits)
+    if not clean:
+        return None, None, None
+
+    ean = normalize_barcode_to_ean(clean)
+    upc = clean if len(clean) == 12 else (clean[-12:] if len(clean) >= 12 else None)
+    gtin = clean if len(clean) in {13, 14} else None
+    return ean, upc, gtin
+
+
+def merge_identifier_maps(*maps: dict[str, str]) -> dict[str, str]:
+    merged: dict[str, str] = {}
+    for mapping in maps:
+        for key, value in mapping.items():
+            if value and key not in merged:
+                merged[key] = value
+    return merged
+
+
+def barcode_candidate_score(digits: str) -> int:
+    clean = re.sub(r"\D", "", digits)
+    ean = normalize_barcode_to_ean(clean)
+    if not ean:
+        return -1
+
+    score = 0
+    if clean.startswith("0081") or clean.startswith("0084") or ean.startswith("081") or ean.startswith("084"):
+        score += 20
+    if len(clean) in {13, 14}:
+        score += 10
+    if len(clean) == 12:
+        score += 5
+    if ean.startswith("07") or ean.startswith("72"):
+        score -= 5
+    return score
 
 
 def choose_best_ean(record: ProductRecord) -> str | None:
-    if record.ean:
-        return record.ean
-    if record.gtin and len(re.sub(r"\D", "", record.gtin)) == 13:
-        return re.sub(r"\D", "", record.gtin)
-    if record.upc:
-        return upc_to_ean(record.upc)
-    for key in ("ean", "gtin", "upc"):
-        value = record.identifiers.get(key)
-        if not value:
+    candidates: list[str] = []
+    for value in (record.ean, record.gtin, record.upc):
+        if value:
+            candidates.extend(split_barcode_values(value))
+
+    for value in record.identifiers.values():
+        candidates.extend(split_barcode_values(value))
+
+    best_ean: str | None = None
+    best_score = -1
+    seen: set[str] = set()
+    for digits in candidates:
+        if digits in seen:
             continue
-        digits = re.sub(r"\D", "", value)
-        if len(digits) == 13:
-            return digits
-        if len(digits) == 12:
-            return f"0{digits}"
-    return None
+        seen.add(digits)
+        score = barcode_candidate_score(digits)
+        ean = normalize_barcode_to_ean(digits)
+        if ean and score > best_score:
+            best_score = score
+            best_ean = ean
+    return best_ean
 
 
 def is_renogy_brand(brand: str, title: str) -> bool:
@@ -246,7 +317,9 @@ def extract_key_value_pairs(soup: BeautifulSoup) -> dict[str, str]:
             if key and value:
                 pairs[key] = value
 
-    for block in soup.select("#detailBullets_feature_div, #productDetails_db_sections"):
+    for block in soup.select(
+        "#detailBullets_feature_div, #productDetails_db_sections, #detailBulletsWrapper_feature_div"
+    ):
         text = block.get_text("\n", strip=True)
         for line in text.splitlines():
             if ":" not in line:
@@ -257,25 +330,51 @@ def extract_key_value_pairs(soup: BeautifulSoup) -> dict[str, str]:
             if key and value and key not in pairs:
                 pairs[key] = value
 
+    for row in soup.select(
+        "#productOverview_feature_div tr, .product-facts-detail tr, tr.po-upc, tr.po-gtin, tr.po-ean"
+    ):
+        label_el = row.select_one("td:first-child span, th, td.a-span3 span")
+        value_el = row.select_one("td:last-child span, td.a-span9 span, td.po-break-word")
+        if not label_el or not value_el:
+            continue
+        key = normalize_whitespace(label_el.get_text()).lower()
+        value = normalize_whitespace(value_el.get_text())
+        if key and value:
+            pairs[key] = value
+
     return pairs
+
+
+def extract_identifiers_from_html(html: str) -> dict[str, str]:
+    identifiers: dict[str, str] = {}
+    for match in GTIN_TABLE_PATTERN.finditer(html):
+        label = normalize_whitespace(match.group(1)).lower()
+        value = normalize_whitespace(match.group(2))
+        if label and value:
+            identifiers[label] = value
+    return identifiers
 
 
 def extract_identifiers_from_pairs(pairs: dict[str, str]) -> dict[str, str]:
     identifiers: dict[str, str] = {}
+    typed: dict[str, str] = {}
+
     for key, value in pairs.items():
         normalized_key = key.lower()
-        if any(label in normalized_key for label in IDENTIFIER_LABELS):
-            clean = re.sub(r"\D", "", value)
-            if clean:
-                if "upc" in normalized_key:
-                    identifiers["upc"] = clean
-                elif "ean" in normalized_key:
-                    identifiers["ean"] = clean
-                elif "gtin" in normalized_key:
-                    identifiers["gtin"] = clean
-                else:
-                    identifiers[normalized_key] = clean
-    return identifiers
+        if not any(label in normalized_key for label in IDENTIFIER_LABELS):
+            continue
+        identifiers[normalized_key] = value
+        for digits in split_barcode_values(value):
+            ean, upc, gtin = classify_barcode(digits)
+            if ean and "ean" not in typed:
+                typed["ean"] = ean
+            if upc and "upc" not in typed:
+                typed["upc"] = upc
+            if gtin and "gtin" not in typed:
+                typed["gtin"] = gtin
+
+    typed.update(identifiers)
+    return typed
 
 
 def extract_model_number(pairs: dict[str, str], soup: BeautifulSoup) -> str | None:
@@ -326,7 +425,10 @@ def extract_product_record(
     price = normalize_whitespace(price_el.get_text()) if price_el else None
 
     pairs = extract_key_value_pairs(soup)
-    identifiers = extract_identifiers_from_pairs(pairs)
+    identifiers = merge_identifier_maps(
+        extract_identifiers_from_pairs(pairs),
+        extract_identifiers_from_html(html),
+    )
 
     if not brand:
         brand = pairs.get("brand", search_brand)
@@ -339,26 +441,52 @@ def extract_product_record(
         marketplace=marketplace,
         price=price,
         model_number=extract_model_number(pairs, soup),
-        identifiers=identifiers,
+        identifiers={k: v for k, v in identifiers.items() if k not in {"ean", "upc", "gtin"}},
         ean=identifiers.get("ean"),
         upc=identifiers.get("upc"),
         gtin=identifiers.get("gtin"),
     )
 
     if not record.ean:
-        page_text = soup.get_text(" ", strip=True)
-        for match in EAN_PATTERN.finditer(page_text):
-            candidate = match.group(1)
-            if candidate.startswith("978"):
-                continue
-            record.ean = candidate
-            break
-
-    if not record.ean and record.upc:
-        record.ean = upc_to_ean(record.upc)
+        detail_text = " ".join(
+            block.get_text(" ", strip=True)
+            for block in soup.select(
+                "#productDetails_detailBullets_sections1, #detailBullets_feature_div, "
+                "#productDetails_techSpec_section_1, #productDetails_techSpec_section_2, "
+                "#productOverview_feature_div, .prodDetTable"
+            )
+        )
+        for digits in split_barcode_values(detail_text):
+            ean = normalize_barcode_to_ean(digits)
+            if ean:
+                record.ean = ean
+                break
 
     record.ean = choose_best_ean(record)
+    if record.ean and not record.upc:
+        upc_match = re.search(r"(\d{12})$", record.ean)
+        if upc_match:
+            record.upc = upc_match.group(1)
+    if record.ean and not record.gtin:
+        record.gtin = record.ean
     return record
+
+
+def expand_product_details(page: Page) -> None:
+    selectors = [
+        "#poToggleButton a",
+        "#productDetails_expander_sections_toggle",
+        "a[data-action='a-expander-toggle']",
+        "a.a-expander-header",
+    ]
+    for selector in selectors:
+        try:
+            locator = page.locator(selector)
+            for index in range(min(locator.count(), 4)):
+                locator.nth(index).click(timeout=1_500)
+                time.sleep(0.25)
+        except Exception:
+            continue
 
 
 def dismiss_cookie_banner(page: Page) -> None:
@@ -436,6 +564,7 @@ def fetch_page_html(page: Page, url: str, delay: float, retries: int = 3) -> str
     for attempt in range(1, retries + 1):
         page.goto(url, wait_until="domcontentloaded", timeout=60_000)
         dismiss_cookie_banner(page)
+        expand_product_details(page)
         time.sleep(delay)
 
         for _ in range(3):
@@ -628,8 +757,8 @@ def scrape_products(
                 continue
 
             if not record.ean:
-                record.scrape_error = "EAN not found on product page"
-                print("  Warning: EAN not found", file=sys.stderr)
+                record.scrape_error = "EAN/UPC/GTIN not found on product page"
+                print("  Warning: EAN/UPC/GTIN not found", file=sys.stderr)
             else:
                 print(f"  EAN: {record.ean}", file=sys.stderr)
 

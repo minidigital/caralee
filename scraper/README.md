@@ -74,9 +74,9 @@ Each record includes:
 - `title` — Product title
 - `brand` — Brand name
 - `marketplace` — Marketplace code (e.g. `au` for amazon.com.au)
-- `ean` — Best available 13-digit EAN (derived from EAN/GTIN/UPC when needed)
+- `ean` — Normalized product barcode (from EAN, GTIN, or UPC on the listing)
 - `model_number` — Manufacturer model / part number from product details
-- `upc`, `gtin` — Raw identifiers when present
+- `upc`, `gtin` — Raw identifier values when separately listed
 - `price`, `url`
 - `scrape_error` — Set when a product could not be fully scraped
 
