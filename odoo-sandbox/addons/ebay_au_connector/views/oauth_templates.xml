@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <template id="oauth_result" name="eBay OAuth Result">
+        <t t-call="web.layout">
+            <div class="container mt-5">
+                <div class="alert" t-att-class="'alert-success' if success else 'alert-danger'">
+                    <h3>eBay Australia Connection</h3>
+                    <p t-esc="message"/>
+                </div>
+                <a t-if="account" t-attf-href="/web#id={{ account.id }}&amp;model=ebay.au.account&amp;view_type=form" class="btn btn-primary">
+                    Open eBay Account
+                </a>
+                <a href="/web" class="btn btn-secondary ms-2">Back to Odoo</a>
+            </div>
+        </t>
+    </template>
+</odoo>

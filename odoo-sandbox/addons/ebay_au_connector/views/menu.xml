@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <menuitem id="menu_ebay_au_root" name="eBay AU" sequence="45"/>
+    <menuitem id="menu_ebay_au_accounts" name="Accounts" parent="menu_ebay_au_root" action="action_ebay_au_account" sequence="10"/>
+    <menuitem id="menu_ebay_au_listings" name="Listings" parent="menu_ebay_au_root" action="action_ebay_au_listing" sequence="20"/>
+    <menuitem id="menu_ebay_au_orders" name="Orders" parent="menu_ebay_au_root" action="action_ebay_au_order" sequence="30"/>
+</odoo>

@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_ebay_au_listing_list" model="ir.ui.view">
+        <field name="name">ebay.au.listing.list</field>
+        <field name="model">ebay.au.listing</field>
+        <field name="arch" type="xml">
+            <list>
+                <field name="name"/>
+                <field name="account_id"/>
+                <field name="sku"/>
+                <field name="price"/>
+                <field name="base_price" optional="hide"/>
+                <field name="out_of_stock_price_active" optional="show"/>
+                <field name="quantity"/>
+                <field name="state"/>
+                <field name="last_sync"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_ebay_au_listing_form" model="ir.ui.view">
+        <field name="name">ebay.au.listing.form</field>
+        <field name="model">ebay.au.listing</field>
+        <field name="arch" type="xml">
+            <form string="eBay Listing">
+                <header>
+                    <button name="action_sync_inventory" type="object" string="Sync Inventory"/>
+                    <button name="action_create_offer" type="object" string="Create Offer"/>
+                    <button name="action_publish_offer" type="object" string="Publish"/>
+                    <button name="action_sync_all" type="object" string="Sync All" class="btn-primary"/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,inventory_synced,offer_created,published,error"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="account_id"/>
+                            <field name="product_id"/>
+                            <field name="sku"/>
+                            <field name="category_id"/>
+                        </group>
+                        <group>
+                            <field name="base_price" readonly="1"/>
+                            <field name="price" readonly="1"/>
+                            <field name="currency_id"/>
+                            <field name="quantity" readonly="1"/>
+                            <field name="out_of_stock_price_active" readonly="1"/>
+                            <field name="offer_id" readonly="1"/>
+                            <field name="listing_id" readonly="1"/>
+                            <field name="last_sync" readonly="1"/>
+                        </group>
+                    </group>
+                    <group invisible="not last_error">
+                        <field name="last_error" readonly="1"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_ebay_au_listing" model="ir.actions.act_window">
+        <field name="name">eBay Listings</field>
+        <field name="res_model">ebay.au.listing</field>
+        <field name="view_mode">list,form</field>
+    </record>
+</odoo>

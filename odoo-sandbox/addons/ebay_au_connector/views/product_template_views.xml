@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_product_template_form_ebay_au" model="ir.ui.view">
+        <field name="name">product.template.form.ebay.au</field>
+        <field name="model">product.template</field>
+        <field name="inherit_id" ref="product.product_template_only_form_view"/>
+        <field name="arch" type="xml">
+            <xpath expr="//notebook" position="inside">
+                <page string="eBay AU" name="ebay_au">
+                    <group>
+                        <group>
+                            <field name="ebay_sync_enabled"/>
+                            <field name="ebay_account_id" invisible="not ebay_sync_enabled"/>
+                            <field name="ebay_sku" invisible="not ebay_sync_enabled"/>
+                            <field name="ebay_category_id" invisible="not ebay_sync_enabled"/>
+                        </group>
+                        <group>
+                            <field name="ebay_condition" invisible="not ebay_sync_enabled"/>
+                            <field name="ebay_brand" invisible="not ebay_sync_enabled"/>
+                            <field name="ebay_listing_state" invisible="not ebay_sync_enabled"/>
+                            <field name="ebay_listing_id" invisible="1"/>
+                        </group>
+                    </group>
+                    <button name="action_create_ebay_listing" type="object" string="Sync to eBay" class="btn-primary" invisible="not ebay_sync_enabled"/>
+                </page>
+            </xpath>
+        </field>
+    </record>
+</odoo>
