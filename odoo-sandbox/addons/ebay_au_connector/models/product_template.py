@@ -35,15 +35,20 @@ class ProductTemplate(models.Model):
             if not product.ebay_account_id:
                 continue
             listing = product.ebay_listing_id
+            pricing = Listing._ebay_compute_sync_pricing(product.ebay_account_id, product)
             if not listing:
                 listing = Listing.create({
                     "account_id": product.ebay_account_id.id,
                     "product_id": product.id,
                     "sku": product.ebay_sku or product.default_code or str(product.id),
-                    "price": product.list_price,
-                    "quantity": int(product.qty_available) if product.type == "product" else 1,
+                    "base_price": pricing["base_price"],
+                    "price": pricing["price"],
+                    "quantity": pricing["quantity"],
+                    "out_of_stock_price_active": pricing["out_of_stock_price_active"],
                     "category_id": product.ebay_category_id,
                 })
                 product.ebay_listing_id = listing.id
+            else:
+                listing.write(pricing)
             listing.action_sync_all()
         return True

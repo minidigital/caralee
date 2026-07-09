@@ -1,6 +1,6 @@
 {
     "name": "eBay Australia Connector",
-    "version": "18.0.1.0.0",
+    "version": "18.0.1.1.0",
     "category": "Sales/eCommerce",
     "summary": "Connect Odoo to eBay Australia (EBAY_AU) for listings and orders",
     "description": """
@@ -11,6 +11,7 @@ Features:
 - Push Odoo products to eBay inventory and publish offers on EBAY_AU
 - Import eBay orders into Odoo sales orders
 - Scheduled order synchronization
+- Configurable out-of-stock price increase to discourage eBay orders while warehouse stock is zero
 
 Requires an eBay Developer Program application with Sell API scopes.
     """,

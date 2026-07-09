@@ -24,7 +24,20 @@ class EbayListing(models.Model):
     listing_id = fields.Char(readonly=True, copy=False)
     category_id = fields.Char(string="eBay Category ID")
     quantity = fields.Integer(default=1)
-    price = fields.Float(required=True)
+    base_price = fields.Float(
+        string="Odoo Price",
+        help="Normal product sales price before any out-of-stock increase.",
+    )
+    price = fields.Float(
+        string="eBay Price",
+        required=True,
+        help="Price sent to eBay, including any out-of-stock increase.",
+    )
+    out_of_stock_price_active = fields.Boolean(
+        string="Out of Stock Price Active",
+        readonly=True,
+        help="Indicates the configured out-of-stock price increase is currently applied.",
+    )
     currency_id = fields.Many2one(
         "res.currency",
         required=True,
@@ -60,19 +73,54 @@ class EbayListing(models.Model):
 
     @api.onchange("product_id", "account_id")
     def _onchange_product_id(self):
-        if self.product_id:
+        if self.product_id and self.account_id:
+            pricing = self._ebay_compute_sync_pricing(self.account_id, self.product_id)
             self.sku = self.product_id.ebay_sku or self.product_id.default_code or str(self.product_id.id)
-            self.price = self.product_id.list_price
-            self.quantity = int(self.product_id.qty_available) if self.product_id.type == "product" else 1
+            self.base_price = pricing["base_price"]
+            self.price = pricing["price"]
+            self.quantity = pricing["quantity"]
+            self.out_of_stock_price_active = pricing["out_of_stock_price_active"]
             self.category_id = self.product_id.ebay_category_id
+
+    def _refresh_price_from_stock(self):
+        for listing in self:
+            pricing = listing._ebay_compute_sync_pricing(
+                listing.account_id,
+                listing.product_id,
+            )
+            listing.write(pricing)
+
+    def action_apply_stock_pricing(self, sync_to_ebay=False):
+        updated = 0
+        for listing in self:
+            previous = (
+                listing.price,
+                listing.quantity,
+                listing.out_of_stock_price_active,
+            )
+            listing._refresh_price_from_stock()
+            changed = (
+                listing.price,
+                listing.quantity,
+                listing.out_of_stock_price_active,
+            ) != previous
+            if not changed:
+                continue
+            updated += 1
+            if sync_to_ebay and listing.offer_id:
+                listing._sync_inventory()
+                listing._create_offer()
+        return updated
 
     def action_sync_inventory(self):
         for listing in self:
+            listing._refresh_price_from_stock()
             listing._sync_inventory()
         return True
 
     def action_create_offer(self):
         for listing in self:
+            listing._refresh_price_from_stock()
             listing._create_offer()
         return True
 
@@ -83,15 +131,36 @@ class EbayListing(models.Model):
 
     def action_sync_all(self):
         for listing in self:
+            listing._refresh_price_from_stock()
             listing._sync_inventory()
             listing._create_offer()
             listing._publish_offer()
         return True
 
+    @api.model
+    def cron_sync_stock_prices(self):
+        listings = self.search([
+            ("account_id.state", "=", "connected"),
+            ("account_id.active", "=", True),
+            ("offer_id", "!=", False),
+        ])
+        for listing in listings:
+            try:
+                listing.action_apply_stock_pricing(sync_to_ebay=True)
+            except Exception as exc:
+                listing.write({
+                    "state": "error",
+                    "last_error": str(exc),
+                })
+
     def _sync_inventory(self):
         self.ensure_one()
         account = self.account_id
-        payload, sku = self._ebay_inventory_payload(self.product_id, account)
+        payload, sku = self._ebay_inventory_payload(
+            self.product_id,
+            account,
+            quantity=self.quantity,
+        )
         self._ebay_request(
             account,
             "PUT",

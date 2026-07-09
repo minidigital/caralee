@@ -129,14 +129,38 @@ class EbayApiMixin(models.AbstractModel):
             raise UserError(_("Failed to refresh eBay token: %s") % response.text)
         return response.json()
 
-    def _ebay_inventory_payload(self, product, account):
+    def _ebay_get_product_stock_qty(self, product):
+        if product.type == "product":
+            return int(product.qty_available)
+        return 1
+
+    def _ebay_is_out_of_stock(self, product):
+        return product.type == "product" and int(product.qty_available) <= 0
+
+    def _ebay_compute_sync_pricing(self, account, product):
+        base_price = product.list_price
+        quantity = self._ebay_get_product_stock_qty(product)
+        ebay_price = base_price
+        bump_active = False
+        if self._ebay_is_out_of_stock(product) and account.out_of_stock_price_bump_enabled:
+            ebay_price = base_price + account.out_of_stock_price_increase
+            bump_active = True
+        return {
+            "base_price": base_price,
+            "price": ebay_price,
+            "quantity": max(quantity, 0),
+            "out_of_stock_price_active": bump_active,
+        }
+
+    def _ebay_inventory_payload(self, product, account, quantity=None):
         sku = product.ebay_sku or product.default_code or str(product.id)
         description = product.description_sale or product.name
-        quantity = int(product.qty_available) if product.type == "product" else 999
+        if quantity is None:
+            quantity = self._ebay_get_product_stock_qty(product)
         return {
             "availability": {
                 "shipToLocationAvailability": {
-                    "quantity": max(quantity, 0),
+                    "quantity": max(int(quantity), 0),
                 },
             },
             "condition": product.ebay_condition or "NEW",

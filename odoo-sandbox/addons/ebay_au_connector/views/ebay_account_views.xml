@@ -25,6 +25,7 @@
                     <button name="action_fetch_policies" type="object" string="Fetch Policies" invisible="state != 'connected'"/>
                     <button name="action_ensure_inventory_location" type="object" string="Ensure Location" invisible="state != 'connected'"/>
                     <button name="action_sync_orders" type="object" string="Import Orders" invisible="state != 'connected'"/>
+                    <button name="action_sync_listing_prices" type="object" string="Sync Listing Prices" invisible="state != 'connected'"/>
                     <button name="action_disconnect" type="object" string="Disconnect" invisible="state != 'connected'"/>
                     <field name="state" widget="statusbar" statusbar_visible="draft,connected,error"/>
                 </header>
@@ -53,6 +54,12 @@
                             <field name="ru_name"/>
                             <field name="merchant_location_key"/>
                             <field name="default_category_id"/>
+                        </group>
+                    </group>
+                    <group string="Out of Stock Pricing">
+                        <group>
+                            <field name="out_of_stock_price_bump_enabled"/>
+                            <field name="out_of_stock_price_increase" invisible="not out_of_stock_price_bump_enabled"/>
                         </group>
                     </group>
                     <group string="Business Policies" invisible="state != 'connected'">

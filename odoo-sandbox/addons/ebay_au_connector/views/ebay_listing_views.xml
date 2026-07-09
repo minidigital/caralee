@@ -9,6 +9,8 @@
                 <field name="account_id"/>
                 <field name="sku"/>
                 <field name="price"/>
+                <field name="base_price" optional="hide"/>
+                <field name="out_of_stock_price_active" optional="show"/>
                 <field name="quantity"/>
                 <field name="state"/>
                 <field name="last_sync"/>
@@ -37,9 +39,11 @@
                             <field name="category_id"/>
                         </group>
                         <group>
-                            <field name="price"/>
+                            <field name="base_price" readonly="1"/>
+                            <field name="price" readonly="1"/>
                             <field name="currency_id"/>
-                            <field name="quantity"/>
+                            <field name="quantity" readonly="1"/>
+                            <field name="out_of_stock_price_active" readonly="1"/>
                             <field name="offer_id" readonly="1"/>
                             <field name="listing_id" readonly="1"/>
                             <field name="last_sync" readonly="1"/>

@@ -50,6 +50,21 @@ class EbayAccount(models.Model):
         string="Default eBay Category ID",
         help="Fallback eBay category for new listings.",
     )
+    out_of_stock_price_bump_enabled = fields.Boolean(
+        string="Increase Price When Out of Stock",
+        default=True,
+        help="When warehouse stock is zero, add the configured amount to the eBay listing price.",
+    )
+    out_of_stock_price_increase = fields.Monetary(
+        string="Out of Stock Price Increase",
+        default=1100.0,
+        currency_field="company_currency_id",
+        help="Amount added to the Odoo sales price when the product is out of stock.",
+    )
+    company_currency_id = fields.Many2one(
+        related="company_id.currency_id",
+        readonly=True,
+    )
     last_order_sync = fields.Datetime(readonly=True)
     state = fields.Selection(
         [
@@ -164,6 +179,23 @@ class EbayAccount(models.Model):
         for account in self:
             account._sync_orders()
         return True
+
+    def action_sync_listing_prices(self):
+        listings = self.env["ebay.au.listing"].search([
+            ("account_id", "in", self.ids),
+            ("offer_id", "!=", False),
+        ])
+        synced = listings.action_apply_stock_pricing(sync_to_ebay=True)
+        return {
+            "type": "ir.actions.client",
+            "tag": "display_notification",
+            "params": {
+                "title": _("Listing prices updated"),
+                "message": _("%s listing(s) checked for stock-based pricing.") % synced,
+                "type": "success",
+                "sticky": False,
+            },
+        }
 
     def action_view_listings(self):
         self.ensure_one()
