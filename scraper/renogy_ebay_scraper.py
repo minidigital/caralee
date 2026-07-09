@@ -599,6 +599,15 @@ def scrape_store_listings(
     return all_hits
 
 
+def reset_ebay_page(context, page: Page) -> Page:
+    try:
+        if not page.is_closed():
+            page.close()
+    except Exception:
+        pass
+    return context.new_page()
+
+
 def scrape_ebay_products(
     browser: Browser,
     base_url: str,
@@ -630,6 +639,7 @@ def scrape_ebay_products(
             records.append(record)
         except Exception as exc:
             print(f"  Error: {exc}", file=sys.stderr)
+            page = reset_ebay_page(context, page)
             records.append(
                 EbayProductRecord(
                     item_id=hit.item_id,
