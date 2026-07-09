@@ -13,6 +13,8 @@ docker compose up -d
 
 Open http://localhost:8069 and create a database from the web UI.
 
+> **Important:** `localhost` only works on the machine where Docker is running. If Odoo is started in a remote/cloud environment, open it from that host or use a tunnel — not from your laptop's `localhost` unless you run the stack locally.
+
 > **Note:** This compose file uses `network_mode: host` so Odoo and PostgreSQL can communicate in restricted container environments where Docker bridge networking between services is blocked.
 
 ## Defaults
