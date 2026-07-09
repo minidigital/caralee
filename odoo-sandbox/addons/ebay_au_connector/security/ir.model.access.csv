@@ -1,0 +1,5 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_ebay_au_account_user,ebay.au.account user,model_ebay_au_account,base.group_user,1,1,1,0
+access_ebay_au_listing_user,ebay.au.listing user,model_ebay_au_listing,base.group_user,1,1,1,1
+access_ebay_au_order_user,ebay.au.order user,model_ebay_au_order,base.group_user,1,0,0,0
+access_ebay_au_import_orders_wizard_user,ebay.au.import.orders.wizard user,model_ebay_au_import_orders_wizard,base.group_user,1,1,1,1

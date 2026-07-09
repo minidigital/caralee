@@ -32,6 +32,10 @@ Open http://localhost:8069 and create a database from the web UI.
 
 Drop modules into `addons/` — they are mounted at `/mnt/extra-addons`.
 
+Installed modules in this sandbox:
+
+- `ebay_au_connector` — eBay Australia (EBAY_AU) marketplace connector
+
 ## Commands
 
 ```bash

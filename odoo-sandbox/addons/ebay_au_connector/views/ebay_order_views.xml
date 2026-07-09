@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_ebay_au_order_list" model="ir.ui.view">
+        <field name="name">ebay.au.order.list</field>
+        <field name="model">ebay.au.order</field>
+        <field name="arch" type="xml">
+            <list>
+                <field name="name"/>
+                <field name="account_id"/>
+                <field name="buyer_username"/>
+                <field name="total_amount"/>
+                <field name="currency_id"/>
+                <field name="payment_status"/>
+                <field name="fulfillment_status"/>
+                <field name="sale_order_id"/>
+                <field name="state"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_ebay_au_order_form" model="ir.ui.view">
+        <field name="name">ebay.au.order.form</field>
+        <field name="model">ebay.au.order</field>
+        <field name="arch" type="xml">
+            <form string="eBay Order">
+                <header>
+                    <button name="action_open_sale_order" type="object" string="Open Sale Order" invisible="not sale_order_id"/>
+                    <field name="state" widget="statusbar"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="name"/>
+                            <field name="account_id"/>
+                            <field name="ebay_order_id"/>
+                            <field name="buyer_username"/>
+                        </group>
+                        <group>
+                            <field name="total_amount"/>
+                            <field name="currency_id"/>
+                            <field name="payment_status"/>
+                            <field name="fulfillment_status"/>
+                            <field name="sale_order_id"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Raw Payload">
+                            <field name="raw_payload" readonly="1"/>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_ebay_au_order" model="ir.actions.act_window">
+        <field name="name">eBay Orders</field>
+        <field name="res_model">ebay.au.order</field>
+        <field name="view_mode">list,form</field>
+    </record>
+</odoo>
