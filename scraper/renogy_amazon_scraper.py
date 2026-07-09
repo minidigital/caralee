@@ -1,0 +1,974 @@
+#!/usr/bin/env python3
+"""Scrape EAN codes for Renogy-branded products from Amazon."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import re
+import sys
+import time
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
+from urllib.parse import urljoin, urlencode, urlparse
+
+from bs4 import BeautifulSoup
+from playwright.sync_api import Browser, Page, sync_playwright
+
+DEFAULT_MARKETPLACES: dict[str, str] = {
+    "au": "https://www.amazon.com.au",
+    "us": "https://www.amazon.com",
+    "uk": "https://www.amazon.co.uk",
+    "de": "https://www.amazon.de",
+    "fr": "https://www.amazon.fr",
+    "it": "https://www.amazon.it",
+    "es": "https://www.amazon.es",
+    "ca": "https://www.amazon.ca",
+}
+
+MARKETPLACE_SETTINGS: dict[str, dict[str, str | dict[str, float]]] = {
+    "au": {
+        "locale": "en-AU",
+        "timezone_id": "Australia/Sydney",
+        "accept_language": "en-AU,en;q=0.9",
+        "geolocation": {"longitude": 151.2093, "latitude": -33.8688},
+    },
+    "us": {
+        "locale": "en-US",
+        "timezone_id": "America/New_York",
+        "accept_language": "en-US,en;q=0.9",
+        "geolocation": {"longitude": -74.006, "latitude": 40.7128},
+    },
+    "uk": {
+        "locale": "en-GB",
+        "timezone_id": "Europe/London",
+        "accept_language": "en-GB,en;q=0.9",
+        "geolocation": {"longitude": -0.1276, "latitude": 51.5074},
+    },
+}
+DEFAULT_MARKETPLACE_SETTINGS: dict[str, str | dict[str, float]] = {
+    "locale": "en-US",
+    "timezone_id": "UTC",
+    "accept_language": "en-US,en;q=0.9",
+    "geolocation": {"longitude": 0.0, "latitude": 0.0},
+}
+
+DEFAULT_AU_RENOGY_STORE = (
+    "https://www.amazon.com.au/stores/Renogy/page/"
+    "027078F8-DAAC-4849-888A-CDFBA339F29E"
+)
+ASIN_PATTERN = re.compile(r"/(?:dp|gp/product)/([A-Z0-9]{10})")
+STORE_PAGE_PATTERN = re.compile(r"/stores/(?:[^/]+/)?page/[0-9A-F-]{36}", re.IGNORECASE)
+EAN_PATTERN = re.compile(r"\b(\d{13})\b")
+UPC_TO_EAN_PATTERN = re.compile(r"\b0?(\d{12})\b")
+
+IDENTIFIER_LABELS = (
+    "ean",
+    "gtin",
+    "global trade identification number",
+    "european article number",
+    "upc",
+    "universal product code",
+    "barcode",
+)
+
+GTIN_TABLE_PATTERN = re.compile(
+    r"<th[^>]*>\s*([^<]*(?:UPC|EAN|GTIN|Global Trade|Universal Product|European Article|Barcode)[^<]*)</th>\s*"
+    r"<td[^>]*>\s*([^<]+)",
+    re.IGNORECASE,
+)
+BARCODE_VALUE_PATTERN = re.compile(r"\d{12,14}")
+
+
+@dataclass
+class ProductRecord:
+    asin: str
+    title: str
+    brand: str
+    url: str
+    marketplace: str
+    ean: str | None = None
+    model_number: str | None = None
+    upc: str | None = None
+    gtin: str | None = None
+    price: str | None = None
+    identifiers: dict[str, str] = field(default_factory=dict)
+    scrape_error: str | None = None
+
+
+MODEL_NUMBER_KEYS = (
+    "item model number",
+    "model number",
+    "model name",
+    "manufacturer part number",
+    "part number",
+    "mpn",
+)
+
+
+def normalize_whitespace(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def asin_from_url(url: str) -> str | None:
+    match = ASIN_PATTERN.search(url)
+    return match.group(1) if match else None
+
+
+def upc_to_ean(upc: str) -> str | None:
+    return normalize_barcode_to_ean(re.sub(r"\D", "", upc))
+
+
+def split_barcode_values(value: str) -> list[str]:
+    values: list[str] = []
+    for chunk in re.split(r"[,;/]+", value):
+        for match in BARCODE_VALUE_PATTERN.findall(chunk):
+            values.append(match)
+    return values
+
+
+def normalize_barcode_to_ean(digits: str) -> str | None:
+    digits = re.sub(r"\D", "", digits)
+    if not digits:
+        return None
+    if len(digits) == 14 and digits.startswith("0"):
+        digits = digits[1:]
+    if len(digits) == 13:
+        if digits.startswith("978") or digits.startswith("979"):
+            return None
+        return digits
+    if len(digits) == 12:
+        return f"0{digits}"
+    if len(digits) == 14:
+        return digits[-13:]
+    return None
+
+
+def classify_barcode(digits: str) -> tuple[str | None, str | None, str | None]:
+    clean = re.sub(r"\D", "", digits)
+    if not clean:
+        return None, None, None
+
+    ean = normalize_barcode_to_ean(clean)
+    upc = clean if len(clean) == 12 else (clean[-12:] if len(clean) >= 12 else None)
+    gtin = clean if len(clean) in {13, 14} else None
+    return ean, upc, gtin
+
+
+def merge_identifier_maps(*maps: dict[str, str]) -> dict[str, str]:
+    merged: dict[str, str] = {}
+    for mapping in maps:
+        for key, value in mapping.items():
+            if value and key not in merged:
+                merged[key] = value
+    return merged
+
+
+def barcode_candidate_score(digits: str) -> int:
+    clean = re.sub(r"\D", "", digits)
+    ean = normalize_barcode_to_ean(clean)
+    if not ean:
+        return -1
+
+    score = 0
+    if clean.startswith("0081") or clean.startswith("0084") or ean.startswith("081") or ean.startswith("084"):
+        score += 20
+    if len(clean) in {13, 14}:
+        score += 10
+    if len(clean) == 12:
+        score += 5
+    if ean.startswith("07") or ean.startswith("72"):
+        score -= 5
+    return score
+
+
+def choose_best_ean(record: ProductRecord) -> str | None:
+    candidates: list[str] = []
+    for value in (record.ean, record.gtin, record.upc):
+        if value:
+            candidates.extend(split_barcode_values(value))
+
+    for value in record.identifiers.values():
+        candidates.extend(split_barcode_values(value))
+
+    best_ean: str | None = None
+    best_score = -1
+    seen: set[str] = set()
+    for digits in candidates:
+        if digits in seen:
+            continue
+        seen.add(digits)
+        score = barcode_candidate_score(digits)
+        ean = normalize_barcode_to_ean(digits)
+        if ean and score > best_score:
+            best_score = score
+            best_ean = ean
+    return best_ean
+
+
+def is_renogy_brand(brand: str, title: str) -> bool:
+    combined = f"{brand} {title}".lower()
+    return "renogy" in combined
+
+
+def build_search_url(base_url: str, query: str, page: int, brand: str | None = "Renogy") -> str:
+    params: dict[str, str] = {"k": query, "page": str(page)}
+    if brand:
+        params["rh"] = f"p_4:{brand}"
+    return f"{base_url}/s?{urlencode(params)}"
+
+
+def wait_for_results(page: Page) -> None:
+    page.wait_for_load_state("domcontentloaded")
+    try:
+        page.wait_for_selector(
+            "[data-component-type='s-search-result'][data-asin]:not([data-asin=''])",
+            timeout=20_000,
+        )
+    except Exception:
+        pass
+    try:
+        page.wait_for_load_state("networkidle", timeout=10_000)
+    except Exception:
+        pass
+    time.sleep(2.0)
+
+
+def parse_search_results(
+    html: str,
+    base_url: str,
+    *,
+    require_renogy_in_listing: bool = True,
+) -> list[dict[str, str]]:
+    soup = BeautifulSoup(html, "html.parser")
+    results: list[dict[str, str]] = []
+    seen_asins: set[str] = set()
+
+    for item in soup.select("[data-component-type='s-search-result'], .s-result-item[data-asin]"):
+        asin = item.get("data-asin", "").strip()
+        if not asin or asin in seen_asins:
+            continue
+
+        title_el = item.select_one(
+            "a.a-link-normal .a-text-normal, h2 a.a-link-normal span, .a-text-normal"
+        )
+        title = normalize_whitespace(title_el.get_text()) if title_el else ""
+
+        brand_el = item.select_one(
+            ".a-size-base.a-color-secondary:not(:empty), "
+            "[data-cy='title-recipe-brand'] .a-size-base"
+        )
+        brand = normalize_whitespace(brand_el.get_text()) if brand_el else ""
+        if any(
+            phrase in brand.lower()
+            for phrase in (
+                "amazon's choice",
+                "best seller",
+                "bought in past month",
+                "bought in past week",
+                "new on amazon",
+            )
+        ):
+            brand = ""
+
+        link_el = item.select_one("h2 a[href]")
+        href = link_el.get("href", "") if link_el else ""
+        url = f"{base_url}{href}" if href.startswith("/") else href
+        if not url:
+            url = f"{base_url}/dp/{asin}"
+
+        if require_renogy_in_listing and not is_renogy_brand(brand, title):
+            continue
+
+        seen_asins.add(asin)
+        results.append({"asin": asin, "title": title, "brand": brand, "url": url})
+
+    return results
+
+
+def extract_key_value_pairs(soup: BeautifulSoup) -> dict[str, str]:
+    pairs: dict[str, str] = {}
+
+    selectors = [
+        "#detailBullets_feature_div li",
+        "#productDetails_detailBullets_sections1 tr",
+        "#productDetails_techSpec_section_1 tr",
+        "#productDetails_techSpec_section_2 tr",
+        ".prodDetTable tr",
+        "#poExpander tr",
+    ]
+    for selector in selectors:
+        for row in soup.select(selector):
+            if row.name == "li":
+                text = normalize_whitespace(row.get_text(" ", strip=True))
+                if ":" in text:
+                    key, value = text.split(":", 1)
+                    pairs[normalize_whitespace(key).lower()] = normalize_whitespace(value)
+                continue
+
+            th = row.select_one("th")
+            td = row.select_one("td")
+            if not th or not td:
+                continue
+            key = normalize_whitespace(th.get_text()).lower()
+            value = normalize_whitespace(td.get_text(" ", strip=True))
+            if key and value:
+                pairs[key] = value
+
+    for block in soup.select(
+        "#detailBullets_feature_div, #productDetails_db_sections, #detailBulletsWrapper_feature_div"
+    ):
+        text = block.get_text("\n", strip=True)
+        for line in text.splitlines():
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            key = normalize_whitespace(key).lower()
+            value = normalize_whitespace(value)
+            if key and value and key not in pairs:
+                pairs[key] = value
+
+    for row in soup.select(
+        "#productOverview_feature_div tr, .product-facts-detail tr, tr.po-upc, tr.po-gtin, tr.po-ean"
+    ):
+        label_el = row.select_one("td:first-child span, th, td.a-span3 span")
+        value_el = row.select_one("td:last-child span, td.a-span9 span, td.po-break-word")
+        if not label_el or not value_el:
+            continue
+        key = normalize_whitespace(label_el.get_text()).lower()
+        value = normalize_whitespace(value_el.get_text())
+        if key and value:
+            pairs[key] = value
+
+    return pairs
+
+
+def extract_identifiers_from_html(html: str) -> dict[str, str]:
+    identifiers: dict[str, str] = {}
+    for match in GTIN_TABLE_PATTERN.finditer(html):
+        label = normalize_whitespace(match.group(1)).lower()
+        value = normalize_whitespace(match.group(2))
+        if label and value:
+            identifiers[label] = value
+    return identifiers
+
+
+def extract_identifiers_from_pairs(pairs: dict[str, str]) -> dict[str, str]:
+    identifiers: dict[str, str] = {}
+    typed: dict[str, str] = {}
+
+    for key, value in pairs.items():
+        normalized_key = key.lower()
+        if not any(label in normalized_key for label in IDENTIFIER_LABELS):
+            continue
+        identifiers[normalized_key] = value
+        for digits in split_barcode_values(value):
+            ean, upc, gtin = classify_barcode(digits)
+            if ean and "ean" not in typed:
+                typed["ean"] = ean
+            if upc and "upc" not in typed:
+                typed["upc"] = upc
+            if gtin and "gtin" not in typed:
+                typed["gtin"] = gtin
+
+    typed.update(identifiers)
+    return typed
+
+
+def extract_model_number(pairs: dict[str, str], soup: BeautifulSoup) -> str | None:
+    for key in MODEL_NUMBER_KEYS:
+        value = pairs.get(key)
+        if value:
+            return value
+
+    for selector in (
+        "tr.po-model_number span.po-break-word",
+        "#productOverview_feature_div tr.po-model_number td",
+        "span.po-model_number .po-break-word",
+    ):
+        element = soup.select_one(selector)
+        if element:
+            value = normalize_whitespace(element.get_text())
+            if value:
+                return value
+
+    return None
+
+
+def extract_product_record(
+    html: str,
+    asin: str,
+    url: str,
+    marketplace: str,
+    search_title: str = "",
+    search_brand: str = "",
+) -> ProductRecord:
+    soup = BeautifulSoup(html, "html.parser")
+
+    title_el = soup.select_one("#productTitle")
+    title = normalize_whitespace(title_el.get_text()) if title_el else search_title
+
+    brand_el = soup.select_one(
+        "#bylineInfo, .po-brand .a-span9 span, tr.po-brand span.po-break-word"
+    )
+    brand = normalize_whitespace(brand_el.get_text()) if brand_el else search_brand
+    brand = re.sub(
+        r"^Visit the\s+|\s+Store$|^Brand:\s*",
+        "",
+        brand,
+        flags=re.IGNORECASE,
+    ).strip()
+
+    price_el = soup.select_one(".a-price .a-offscreen, #priceblock_ourprice, #priceblock_dealprice")
+    price = normalize_whitespace(price_el.get_text()) if price_el else None
+
+    pairs = extract_key_value_pairs(soup)
+    identifiers = merge_identifier_maps(
+        extract_identifiers_from_pairs(pairs),
+        extract_identifiers_from_html(html),
+    )
+
+    if not brand:
+        brand = pairs.get("brand", search_brand)
+
+    record = ProductRecord(
+        asin=asin,
+        title=title,
+        brand=brand,
+        url=url,
+        marketplace=marketplace,
+        price=price,
+        model_number=extract_model_number(pairs, soup),
+        identifiers={k: v for k, v in identifiers.items() if k not in {"ean", "upc", "gtin"}},
+        ean=identifiers.get("ean"),
+        upc=identifiers.get("upc"),
+        gtin=identifiers.get("gtin"),
+    )
+
+    if not record.ean:
+        detail_text = " ".join(
+            block.get_text(" ", strip=True)
+            for block in soup.select(
+                "#productDetails_detailBullets_sections1, #detailBullets_feature_div, "
+                "#productDetails_techSpec_section_1, #productDetails_techSpec_section_2, "
+                "#productOverview_feature_div, .prodDetTable"
+            )
+        )
+        for digits in split_barcode_values(detail_text):
+            ean = normalize_barcode_to_ean(digits)
+            if ean:
+                record.ean = ean
+                break
+
+    record.ean = choose_best_ean(record)
+    if record.ean and not record.upc:
+        upc_match = re.search(r"(\d{12})$", record.ean)
+        if upc_match:
+            record.upc = upc_match.group(1)
+    if record.ean and not record.gtin:
+        record.gtin = record.ean
+    return record
+
+
+def expand_product_details(page: Page) -> None:
+    selectors = [
+        "#poToggleButton a",
+        "#productDetails_expander_sections_toggle",
+        "a[data-action='a-expander-toggle']",
+        "a.a-expander-header",
+    ]
+    for selector in selectors:
+        try:
+            locator = page.locator(selector)
+            for index in range(min(locator.count(), 4)):
+                locator.nth(index).click(timeout=1_500)
+                time.sleep(0.25)
+        except Exception:
+            continue
+
+
+def dismiss_cookie_banner(page: Page) -> None:
+    selectors = [
+        "#sp-cc-accept",
+        "input#sp-cc-accept",
+        "button[data-action='a-popover-close']",
+    ]
+    for selector in selectors:
+        try:
+            if page.locator(selector).count():
+                page.locator(selector).first.click(timeout=2_000)
+                time.sleep(0.5)
+                return
+        except Exception:
+            continue
+
+
+STEALTH_INIT_SCRIPT = """
+Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+window.chrome = { runtime: {} };
+"""
+
+BROWSER_ARGS = [
+    "--disable-blink-features=AutomationControlled",
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+]
+
+
+def create_browser_context(browser: Browser, marketplace: str = "au"):
+    settings = {**DEFAULT_MARKETPLACE_SETTINGS, **MARKETPLACE_SETTINGS.get(marketplace, {})}
+    geolocation = settings["geolocation"]
+    if not isinstance(geolocation, dict):
+        geolocation = {"longitude": 0.0, "latitude": 0.0}
+
+    context = browser.new_context(
+        locale=str(settings["locale"]),
+        timezone_id=str(settings["timezone_id"]),
+        geolocation=geolocation,
+        permissions=["geolocation"],
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ),
+        viewport={"width": 1366, "height": 900},
+        extra_http_headers={
+            "Accept-Language": str(settings["accept_language"]),
+            "Accept": (
+                "text/html,application/xhtml+xml,application/xml;q=0.9,"
+                "image/avif,image/webp,*/*;q=0.8"
+            ),
+        },
+    )
+    context.add_init_script(STEALTH_INIT_SCRIPT)
+    return context
+
+
+def is_blocked_page(html: str, title: str = "") -> bool:
+    lowered = f"{title} {html[:5000]}".lower()
+    if len(html) < 10_000:
+        return True
+    blocked_markers = (
+        "sorry! something went wrong",
+        "enter the characters you see below",
+        "type the characters you see in this image",
+        "robot check",
+        "automated access",
+    )
+    return any(marker in lowered for marker in blocked_markers)
+
+
+def fetch_page_html(page: Page, url: str, delay: float, retries: int = 3) -> str:
+    last_html = ""
+    for attempt in range(1, retries + 1):
+        page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+        dismiss_cookie_banner(page)
+        expand_product_details(page)
+        time.sleep(delay)
+
+        for _ in range(3):
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
+            time.sleep(0.4)
+        page.evaluate("window.scrollTo(0, 0)")
+        time.sleep(0.3)
+
+        last_html = page.content()
+        if not is_blocked_page(last_html, page.title()):
+            return last_html
+
+        print(
+            f"  Blocked or empty page (attempt {attempt}/{retries}), retrying...",
+            file=sys.stderr,
+        )
+        time.sleep(delay * attempt)
+
+    return last_html
+
+
+def normalize_store_page_url(base_url: str, href: str) -> str | None:
+    if not href:
+        return None
+    absolute = urljoin(base_url, href)
+    parsed = urlparse(absolute)
+    if parsed.netloc and parsed.netloc not in urlparse(base_url).netloc:
+        return None
+    match = STORE_PAGE_PATTERN.search(parsed.path)
+    if not match:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}{match.group(0)}"
+
+
+def parse_store_page(html: str, base_url: str) -> tuple[list[dict[str, str]], set[str]]:
+    soup = BeautifulSoup(html, "html.parser")
+    asins: set[str] = set()
+    titles: dict[str, str] = {}
+
+    for match in ASIN_PATTERN.finditer(html):
+        asins.add(match.group(1))
+
+    for item in soup.select('[data-csa-c-item-type="asin"]'):
+        item_id = item.get("data-csa-c-item-id", "")
+        asin_match = re.search(r"amzn1\.asin\.([A-Z0-9]{10})", item_id)
+        if not asin_match:
+            continue
+        asin = asin_match.group(1)
+        asins.add(asin)
+        title_el = item.select_one(
+            "[data-testid='product-grid-title'], .ProductGridItem__title__n6e8q, .a-truncate-full"
+        )
+        if title_el:
+            titles[asin] = normalize_whitespace(title_el.get_text())
+
+    subpages: set[str] = set()
+    for link in soup.select('a[href*="/stores/page/"]'):
+        normalized = normalize_store_page_url(base_url, link.get("href", ""))
+        if normalized:
+            subpages.add(normalized)
+
+    results = [
+        {
+            "asin": asin,
+            "title": titles.get(asin, ""),
+            "brand": "Renogy",
+            "url": f"{base_url}/dp/{asin}",
+        }
+        for asin in sorted(asins)
+    ]
+    return results, subpages
+
+
+def scrape_store_pages(
+    page: Page,
+    base_url: str,
+    store_url: str,
+    delay: float,
+    max_store_pages: int,
+) -> list[dict[str, str]]:
+    queue: list[str] = [store_url]
+    visited_pages: set[str] = set()
+    seen_asins: set[str] = set()
+    all_results: list[dict[str, str]] = []
+
+    while queue and len(visited_pages) < max_store_pages:
+        current_url = queue.pop(0)
+        normalized_current = normalize_store_page_url(base_url, current_url) or current_url
+        if normalized_current in visited_pages:
+            continue
+        visited_pages.add(normalized_current)
+
+        print(f"Store page {len(visited_pages)}/{max_store_pages}: {normalized_current}", file=sys.stderr)
+        html = fetch_page_html(page, normalized_current, delay)
+        page_results, subpages = parse_store_page(html, base_url)
+
+        new_items = [item for item in page_results if item["asin"] not in seen_asins]
+        for item in new_items:
+            seen_asins.add(item["asin"])
+        all_results.extend(new_items)
+
+        print(
+            f"  Found {len(new_items)} products ({len(all_results)} total unique ASINs)",
+            file=sys.stderr,
+        )
+
+        for subpage in sorted(subpages):
+            if subpage not in visited_pages and subpage not in queue:
+                queue.append(subpage)
+
+        time.sleep(delay)
+
+    return all_results
+
+
+def scrape_search_pages(
+    page: Page,
+    base_url: str,
+    query: str,
+    max_pages: int,
+    delay: float,
+    brand_filter: str | None = "Renogy",
+) -> list[dict[str, str]]:
+    all_results: list[dict[str, str]] = []
+    seen_asins: set[str] = set()
+
+    for page_num in range(1, max_pages + 1):
+        search_url = build_search_url(base_url, query, page_num, brand=brand_filter)
+        print(f"Searching page {page_num}: {search_url}", file=sys.stderr)
+        page.goto(search_url, wait_until="domcontentloaded", timeout=60_000)
+        dismiss_cookie_banner(page)
+        wait_for_results(page)
+
+        html = page.content()
+        if is_blocked_page(html, page.title()):
+            print("  Search page blocked, retrying once...", file=sys.stderr)
+            time.sleep(delay * 2)
+            page.goto(search_url, wait_until="domcontentloaded", timeout=60_000)
+            dismiss_cookie_banner(page)
+            wait_for_results(page)
+            html = page.content()
+        page_results = parse_search_results(
+            html,
+            base_url,
+            require_renogy_in_listing=False,
+        )
+        new_items = [item for item in page_results if item["asin"] not in seen_asins]
+        for item in new_items:
+            seen_asins.add(item["asin"])
+        all_results.extend(new_items)
+
+        print(f"  Found {len(new_items)} Renogy products on page {page_num}", file=sys.stderr)
+        if not new_items and page_num > 1:
+            break
+        time.sleep(delay)
+
+    return all_results
+
+
+def scrape_products(
+    browser: Browser,
+    base_url: str,
+    marketplace: str,
+    search_hits: list[dict[str, str]],
+    delay: float,
+    headless: bool,
+) -> list[ProductRecord]:
+    context = create_browser_context(browser, marketplace=marketplace)
+    page = context.new_page()
+    records: list[ProductRecord] = []
+
+    for index, hit in enumerate(search_hits, start=1):
+        asin = hit["asin"]
+        product_url = f"{base_url}/dp/{asin}"
+        print(f"[{index}/{len(search_hits)}] Scraping {asin}: {hit.get('title', '')[:70]}", file=sys.stderr)
+
+        try:
+            html = fetch_page_html(page, product_url, delay)
+            record = extract_product_record(
+                html,
+                asin=asin,
+                url=product_url,
+                marketplace=marketplace,
+                search_title=hit.get("title", ""),
+                search_brand=hit.get("brand", ""),
+            )
+
+            if not is_renogy_brand(record.brand, record.title):
+                print(f"  Skipping non-Renogy listing: brand={record.brand!r}", file=sys.stderr)
+                continue
+
+            if not record.ean:
+                record.scrape_error = "EAN/UPC/GTIN not found on product page"
+                print("  Warning: EAN/UPC/GTIN not found", file=sys.stderr)
+            else:
+                print(f"  EAN: {record.ean}", file=sys.stderr)
+
+            if record.model_number:
+                print(f"  Model: {record.model_number}", file=sys.stderr)
+
+            records.append(record)
+        except Exception as exc:
+            print(f"  Error: {exc}", file=sys.stderr)
+            records.append(
+                ProductRecord(
+                    asin=asin,
+                    title=hit.get("title", ""),
+                    brand=hit.get("brand", ""),
+                    url=product_url,
+                    marketplace=marketplace,
+                    scrape_error=str(exc),
+                )
+            )
+
+        time.sleep(delay)
+
+    context.close()
+    return records
+
+
+def write_json(path: Path, records: list[ProductRecord]) -> None:
+    payload = [asdict(record) for record in records]
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def write_csv(path: Path, records: list[ProductRecord]) -> None:
+    fieldnames = [
+        "asin",
+        "title",
+        "brand",
+        "marketplace",
+        "ean",
+        "model_number",
+        "upc",
+        "gtin",
+        "price",
+        "url",
+        "scrape_error",
+    ]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for record in records:
+            writer.writerow({key: getattr(record, key) for key in fieldnames})
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Scrape EAN codes for Renogy-branded products from Amazon.",
+    )
+    parser.add_argument(
+        "--marketplace",
+        choices=sorted(DEFAULT_MARKETPLACES),
+        default="au",
+        help="Amazon marketplace to scrape (default: au / amazon.com.au).",
+    )
+    parser.add_argument(
+        "--base-url",
+        default=None,
+        help="Override marketplace base URL (e.g. https://www.amazon.com).",
+    )
+    parser.add_argument(
+        "--query",
+        default="Renogy",
+        help="Search query used on Amazon (default: Renogy).",
+    )
+    parser.add_argument(
+        "--max-pages",
+        type=int,
+        default=3,
+        help="Maximum search result pages to crawl (default: 3).",
+    )
+    parser.add_argument(
+        "--max-products",
+        type=int,
+        default=0,
+        help="Maximum products to scrape after search (0 = no limit).",
+    )
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=2.0,
+        help="Delay in seconds between requests (default: 2.0).",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("renogy_eans_au.json"),
+        help="Output file path (.json or .csv).",
+    )
+    parser.add_argument(
+        "--no-brand-filter",
+        action="store_true",
+        help="Do not apply Amazon's brand filter (p_4) on search.",
+    )
+    parser.add_argument(
+        "--headed",
+        action="store_true",
+        help="Run browser in headed mode (useful for debugging).",
+    )
+    parser.add_argument(
+        "--use-search",
+        action="store_true",
+        help="Use Amazon search instead of the Renogy brand store page.",
+    )
+    parser.add_argument(
+        "--store-url",
+        default=None,
+        help=(
+            "Scrape products from an Amazon brand store URL instead of search. "
+            f"AU default: {DEFAULT_AU_RENOGY_STORE}"
+        ),
+    )
+    parser.add_argument(
+        "--max-store-pages",
+        type=int,
+        default=25,
+        help="Maximum brand store sub-pages to crawl (default: 25).",
+    )
+    parser.add_argument(
+        "--asin",
+        action="append",
+        default=[],
+        help="Scrape specific ASIN(s) instead of running search. Can be repeated.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    base_url = args.base_url or DEFAULT_MARKETPLACES[args.marketplace]
+    headless = not args.headed
+
+    store_url = args.store_url
+    if store_url is None and args.marketplace == "au" and not args.asin and not args.use_search:
+        store_url = DEFAULT_AU_RENOGY_STORE
+
+    print(f"Marketplace: {base_url}", file=sys.stderr)
+    if store_url and not args.asin:
+        print(f"Store: {store_url}", file=sys.stderr)
+    print(f"Output: {args.output}", file=sys.stderr)
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(
+            headless=headless,
+            args=BROWSER_ARGS,
+        )
+
+        if args.asin:
+            search_hits = [
+                {"asin": asin, "title": "", "brand": "Renogy", "url": f"{base_url}/dp/{asin}"}
+                for asin in args.asin
+            ]
+        elif store_url:
+            context = create_browser_context(browser, marketplace=args.marketplace)
+            page = context.new_page()
+            search_hits = scrape_store_pages(
+                page=page,
+                base_url=base_url,
+                store_url=store_url,
+                delay=args.delay,
+                max_store_pages=args.max_store_pages,
+            )
+            context.close()
+        else:
+            context = create_browser_context(browser, marketplace=args.marketplace)
+            page = context.new_page()
+            search_hits = scrape_search_pages(
+                page=page,
+                base_url=base_url,
+                query=args.query,
+                max_pages=args.max_pages,
+                delay=args.delay,
+                brand_filter=None if args.no_brand_filter else "Renogy",
+            )
+            context.close()
+
+        if args.max_products > 0:
+            search_hits = search_hits[: args.max_products]
+
+        print(f"Scraping {len(search_hits)} product(s)...", file=sys.stderr)
+        records = scrape_products(
+            browser=browser,
+            base_url=base_url,
+            marketplace=args.marketplace,
+            search_hits=search_hits,
+            delay=args.delay,
+            headless=headless,
+        )
+        browser.close()
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    if args.output.suffix.lower() == ".csv":
+        write_csv(args.output, records)
+    else:
+        write_json(args.output, records)
+
+    with_ean = sum(1 for record in records if record.ean)
+    print(
+        f"Done. {with_ean}/{len(records)} products have an EAN. Wrote {args.output}",
+        file=sys.stderr,
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

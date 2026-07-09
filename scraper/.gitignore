@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+test_output.json
+debug_*.html
+renogy_eans_au*.csv
+renogy_eans_ebay*.csv
+scrape_*.log
+test_ebay_primary.csv
