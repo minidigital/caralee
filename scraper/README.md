@@ -1,15 +1,66 @@
-# Renogy Amazon EAN Scraper
+# Renogy Product Barcode Scraper
 
-Scrapes **EAN** (European Article Number) codes for **Renogy**-branded products listed on Amazon.
+Scrapes **EAN / UPC / GTIN** barcodes for **Renogy** products.
 
-**Default source:** [Renogy brand store](https://www.amazon.com.au/stores/Renogy/page/027078F8-DAAC-4849-888A-CDFBA339F29E) on Amazon Australia. The store page lists far more products than Amazon search (100+ vs ~9).
+## Scrapers
 
-Uses [Playwright](https://playwright.dev/python/) to crawl the Renogy store and product pages, then extracts barcodes from product details (EAN, GTIN, or UPC).
+| Script | Source | Use case |
+|--------|--------|----------|
+| `renogy_scraper.py` | **eBay primary**, Amazon fallback | Recommended — starts from the Renogy eBay AU store |
+| `renogy_amazon_scraper.py` | Amazon only | Direct Amazon AU store scrape |
 
-## Requirements
+### Recommended: eBay primary + Amazon fallback
 
-- Python 3.10+
-- Chromium (installed via Playwright)
+```bash
+python renogy_scraper.py --output renogy_eans_ebay_primary.csv
+```
+
+Flow:
+
+1. Crawl the [Renogy eBay AU store](https://www.ebay.com.au/str/renogysolarau) (categories + pagination)
+2. Visit each `/itm/` listing and extract **UPC / EAN / GTIN** from Item specifics
+3. Normalize all barcodes into the `ean` column
+4. For listings missing a barcode, fall back to **Amazon AU** matched by model number or title
+5. Uses `renogy_eans_au_all.csv` as Amazon cache if present (skips re-scraping Amazon)
+
+### Options (`renogy_scraper.py`)
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--ebay-store-url` | Renogy eBay AU store | eBay store to crawl |
+| `--amazon-cache` | `renogy_eans_au_all.csv` | Cached Amazon data for fallback |
+| `--skip-amazon-scrape` | — | Only use Amazon cache, don't scrape Amazon |
+| `--max-ebay-pages` | `10` | Pages per eBay store category |
+| `--max-products` | `0` | Cap listings (0 = all) |
+| `--delay` | `2.0` | Seconds between requests |
+| `--ebay-item` | — | Scrape specific eBay item ID(s) |
+| `--output` | `renogy_eans_ebay_primary.csv` | Output path (`.csv` or `.json`) |
+
+### Examples
+
+Full scrape with cached Amazon fallback:
+
+```bash
+python renogy_scraper.py --amazon-cache renogy_eans_au_all.csv --skip-amazon-scrape
+```
+
+Scrape specific eBay listings:
+
+```bash
+python renogy_scraper.py --ebay-item 296524321538 --ebay-item 296928240163 --skip-amazon-scrape
+```
+
+---
+
+## Amazon-only scraper
+
+**Default source:** [Renogy brand store](https://www.amazon.com.au/stores/Renogy/page/027078F8-DAAC-4849-888A-CDFBA339F29E) on Amazon Australia.
+
+```bash
+python renogy_amazon_scraper.py --output renogy_eans_au.csv
+```
+
+See `renogy_amazon_scraper.py --help` for Amazon-specific flags (`--use-search`, `--store-url`, etc.).
 
 ## Setup
 
@@ -21,69 +72,19 @@ pip install -r requirements.txt
 playwright install chromium
 ```
 
-## Usage
+## Output fields (unified scraper)
 
-Search Amazon Australia for Renogy products and save results to JSON:
-
-```bash
-python renogy_amazon_scraper.py --output renogy_eans_au.json
-```
-
-Common options:
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--marketplace` | `au` | Amazon region (`au`, `us`, `uk`, `de`, `fr`, `it`, `es`, `ca`) |
-| `--query` | `Renogy` | Search term |
-| `--max-pages` | `3` | Search result pages to crawl |
-| `--max-products` | `0` | Cap number of products (0 = all found) |
-| `--delay` | `2.0` | Seconds between page loads |
-| `--output` | `renogy_eans_au.json` | Output path (`.json` or `.csv`) |
-| `--use-search` | — | Use Amazon search instead of the Renogy brand store |
-| `--store-url` | AU Renogy store | Brand store URL to crawl |
-| `--max-store-pages` | `25` | Brand store sub-pages to crawl |
-| `--no-brand-filter` | — | Skip Amazon brand filter (`p_4:Renogy`) on search |
-| `--asin` | — | Scrape specific ASIN(s) instead of searching |
-| `--headed` | — | Show the browser window (debugging) |
-
-### Examples
-
-Australian marketplace (default), first 10 products, CSV output:
-
-```bash
-python renogy_amazon_scraper.py --max-products 10 --output renogy_eans_au.csv
-```
-
-US marketplace:
-
-```bash
-python renogy_amazon_scraper.py --marketplace us --output renogy_eans_us.json
-```
-
-Single Australian ASIN:
-
-```bash
-python renogy_amazon_scraper.py --asin B08XYZ1234 --output single.json
-```
-
-## Output fields
-
-Each record includes:
-
-- `asin` — Amazon Standard Identification Number (marketplace-specific)
-- `title` — Product title
-- `brand` — Brand name
-- `marketplace` — Marketplace code (e.g. `au` for amazon.com.au)
-- `ean` — Normalized product barcode (from EAN, GTIN, or UPC on the listing)
-- `model_number` — Manufacturer model / part number from product details
-- `upc`, `gtin` — Raw identifier values when separately listed
-- `price`, `url`
-- `scrape_error` — Set when a product could not be fully scraped
+- `ean` — Normalized barcode (from eBay UPC/EAN/GTIN, or Amazon fallback)
+- `model_number` — MPN / model from eBay or Amazon
+- `ebay_item_id`, `ebay_url`, `ebay_price` — eBay listing data
+- `asin`, `amazon_url`, `amazon_price` — Amazon match when found
+- `barcode_source` — `ebay` or `amazon`
+- `match_score` — Amazon title/model match confidence (0–1)
+- `upc`, `gtin` — Raw identifiers when available
 
 ## Notes
 
-- The Renogy brand store on amazon.com.au is the recommended source for AU listings. Amazon search only returns ~9 Renogy products; the store has 100+.
-- Amazon may block or throttle automated access. The scraper retries blocked pages and uses realistic browser settings; increase `--delay` if you see captchas or empty results.
-- Not every listing exposes an EAN on the product page; some only show UPC (converted to EAN when possible).
-- Respect [Amazon's Terms of Service](https://www.amazon.com.au/gp/help/customer/display.html) and applicable robots policies for your use case.
-- For production or high-volume catalog sync, consider the [Amazon Product Advertising API](https://webservices.amazon.com/paapi5/documentation/) or a licensed data provider.
+- eBay Item specifics often include **MPN** but not always **UPC** — Amazon fallback covers those gaps.
+- eBay may show a verification page for automated browsers. Increase `--delay` or run with `--headed` if blocked.
+- Amazon may also throttle automated access; the Amazon scraper includes retry logic.
+- Respect eBay and Amazon Terms of Service for your use case.
