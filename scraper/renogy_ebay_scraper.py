@@ -39,7 +39,21 @@ IDENTIFIER_KEYS = (
     "gtin",
     "global trade item number",
     "global trade identification number",
+    "universal product code",
     "barcode",
+)
+
+INVALID_SPECIFIC_VALUES = {
+    "does not apply",
+    "n/a",
+    "not applicable",
+    "",
+}
+
+ITEM_SPECIFICS_SCOPE_SELECTORS = (
+    '[data-testid="x-about-this-item"]',
+    "#viTabs_0_is",
+    ".x-about-this-item",
 )
 
 MODEL_KEYS = ("mpn", "manufacturer part number", "model", "model number", "part number")
@@ -115,21 +129,72 @@ def dismiss_ebay_consent(page: Page) -> None:
             continue
 
 
+def is_valid_item_page(html: str, title: str = "") -> bool:
+    if is_ebay_blocked(html, title):
+        return False
+    lowered = html.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "item specifics",
+            "x-about-this-item",
+            "ux-labels-values",
+            "about_this_item",
+        )
+    )
+
+
+def wait_for_item_specifics(page: Page, timeout_ms: int = 20_000) -> None:
+    selectors = (
+        '[data-testid="x-about-this-item"] dt',
+        '[data-testid="x-about-this-item"] dl.ux-labels-values',
+        "span.ux-textspans:has-text('Item specifics')",
+    )
+    for selector in selectors:
+        try:
+            page.wait_for_selector(selector, timeout=timeout_ms)
+            return
+        except Exception:
+            continue
+
+
+def scroll_to_item_specifics(page: Page) -> None:
+    try:
+        section = page.locator('[data-testid="x-about-this-item"]').first
+        if section.count():
+            section.scroll_into_view_if_needed(timeout=5_000)
+            time.sleep(0.5)
+            return
+    except Exception:
+        pass
+
+    try:
+        page.locator("span.ux-textspans", has_text="Item specifics").first.scroll_into_view_if_needed(
+            timeout=5_000
+        )
+        time.sleep(0.5)
+    except Exception:
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
+
+
 def fetch_ebay_page(page: Page, url: str, delay: float, retries: int = 3) -> str:
     last_html = ""
     for attempt in range(1, retries + 1):
         page.goto(url, wait_until="domcontentloaded", timeout=60_000)
         dismiss_ebay_consent(page)
         time.sleep(delay)
+        wait_for_item_specifics(page, timeout_ms=15_000)
+        scroll_to_item_specifics(page)
+        time.sleep(0.5)
 
-        for _ in range(4):
+        for _ in range(2):
             page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             time.sleep(0.4)
-        page.evaluate("window.scrollTo(0, 0)")
+        scroll_to_item_specifics(page)
         time.sleep(0.3)
 
         last_html = page.content()
-        if not is_ebay_blocked(last_html, page.title()):
+        if is_valid_item_page(last_html, page.title()):
             return last_html
 
         print(f"  eBay blocked or empty page (attempt {attempt}/{retries})", file=sys.stderr)
@@ -221,40 +286,132 @@ def parse_store_listings(html: str, base_url: str) -> list[EbayListingHit]:
     return list(hits.values())
 
 
-def extract_item_specifics(soup: BeautifulSoup) -> dict[str, str]:
+def _store_specific(specifics: dict[str, str], key: str, value: str) -> None:
+    normalized_key = normalize_whitespace(key).lower().rstrip(":")
+    normalized_value = normalize_whitespace(value)
+    if not normalized_key or not normalized_value:
+        return
+    if normalized_value.lower() in INVALID_SPECIFIC_VALUES:
+        return
+    specifics[normalized_key] = normalized_value
+
+
+def _extract_labels_values_blocks(root: Any) -> dict[str, str]:
     specifics: dict[str, str] = {}
 
-    for block in soup.select("div.ux-labels-values"):
-        labels = block.select(
-            ".ux-labels-values__labels-content, .ux-labels-values__labels, dt"
-        )
-        values = block.select(
-            ".ux-labels-values__values-content, .ux-labels-values__values, dd"
-        )
-        for label_el, value_el in zip(labels, values):
-            key = normalize_whitespace(label_el.get_text()).lower()
-            value = normalize_whitespace(value_el.get_text())
-            if key and value and value.lower() not in {"does not apply", "n/a"}:
-                specifics[key] = value
+    for block in root.select("dl.ux-labels-values, dl[data-testid='ux-labels-values'], div.ux-labels-values"):
+        for dt in block.select("dt"):
+            dd = dt.find_next_sibling("dd")
+            if not dd:
+                continue
+            _store_specific(
+                specifics,
+                dt.get_text(" ", strip=True),
+                dd.get_text(" ", strip=True),
+            )
 
-    for row in soup.select("div.ux-layout-section-module-attributes tr, .item-specifics tr"):
+    for row in root.select("div.ux-layout-section-evo__row"):
+        for block in row.select("dl.ux-labels-values, dl[data-testid='ux-labels-values']"):
+            for dt in block.select("dt"):
+                dd = dt.find_next_sibling("dd")
+                if not dd:
+                    continue
+                _store_specific(
+                    specifics,
+                    dt.get_text(" ", strip=True),
+                    dd.get_text(" ", strip=True),
+                )
+
+    for row in root.select("div.ux-layout-section-module-attributes tr, .item-specifics tr"):
         cells = row.select("td, th")
         if len(cells) >= 2:
-            key = normalize_whitespace(cells[0].get_text()).lower()
-            value = normalize_whitespace(cells[1].get_text())
-            if key and value and value.lower() not in {"does not apply", "n/a"}:
-                specifics[key] = value
+            _store_specific(
+                specifics,
+                cells[0].get_text(" ", strip=True),
+                cells[1].get_text(" ", strip=True),
+            )
 
-    for dt in soup.select("dl dt"):
-        key = normalize_whitespace(dt.get_text()).lower()
+    for dt in root.select("dl dt"):
         dd = dt.find_next_sibling("dd")
         if not dd:
             continue
-        value = normalize_whitespace(dd.get_text())
-        if key and value and value.lower() not in {"does not apply", "n/a"}:
-            specifics[key] = value
+        _store_specific(
+            specifics,
+            dt.get_text(" ", strip=True),
+            dd.get_text(" ", strip=True),
+        )
 
     return specifics
+
+
+def extract_item_specifics_from_json(html: str) -> dict[str, str]:
+    specifics: dict[str, str] = {}
+    pattern = re.compile(
+        r'\{"_type":"LabelsValues"[^}]*"labels":\[\{"_type":"TextualDisplay","textSpans":\[\{"_type":"TextSpan","text":"([^"]+)"\}\]\}[^}]*"values":\[(?:\{[^}]*?"textSpans":\[\{"_type":"TextSpan","text":"([^"]+)"\})',
+    )
+    for label, value in pattern.findall(html):
+        _store_specific(specifics, label, value)
+    return specifics
+
+
+def extract_item_specifics(soup: BeautifulSoup) -> dict[str, str]:
+    specifics: dict[str, str] = {}
+
+    scoped_roots: list[Any] = []
+    for selector in ITEM_SPECIFICS_SCOPE_SELECTORS:
+        scoped_roots.extend(soup.select(selector))
+    if not scoped_roots:
+        scoped_roots = [soup]
+
+    for root in scoped_roots:
+        specifics.update(_extract_labels_values_blocks(root))
+
+    if not any("upc" in key or "ean" in key or "gtin" in key for key in specifics):
+        specifics.update(_extract_labels_values_blocks(soup))
+
+    return specifics
+
+
+def extract_item_specifics_from_page(page: Page) -> dict[str, str]:
+    try:
+        pairs = page.evaluate(
+            """() => {
+                const scopes = [
+                    document.querySelector('[data-testid="x-about-this-item"]'),
+                    document.querySelector('#viTabs_0_is'),
+                    document.querySelector('.x-about-this-item'),
+                ].filter(Boolean);
+                const roots = scopes.length ? scopes : [document];
+                const out = [];
+                for (const root of roots) {
+                    root.querySelectorAll('dl.ux-labels-values dt, dl[data-testid="ux-labels-values"] dt').forEach((dt) => {
+                        const dd = dt.nextElementSibling;
+                        if (!dd) return;
+                        out.push([dt.innerText.trim(), dd.innerText.trim()]);
+                    });
+                }
+                return out;
+            }"""
+        )
+    except Exception:
+        return {}
+
+    specifics: dict[str, str] = {}
+    for key, value in pairs:
+        _store_specific(specifics, key, value)
+    return specifics
+
+
+def extract_variation_ids(html: str) -> list[str]:
+    variation_ids = re.findall(r'"matchingVariationIds":\[(\d+)\]', html)
+    return list(dict.fromkeys(variation_ids))
+
+
+def merge_specifics(*sources: dict[str, str]) -> dict[str, str]:
+    merged: dict[str, str] = {}
+    for source in sources:
+        merged.update(source)
+    return merged
 
 
 def identifiers_from_specifics(specifics: dict[str, str]) -> dict[str, str]:
@@ -286,7 +443,12 @@ def extract_model_number(specifics: dict[str, str]) -> str | None:
     return None
 
 
-def extract_ebay_product_record(html: str, item_id: str, url: str) -> EbayProductRecord:
+def extract_ebay_product_record(
+    html: str,
+    item_id: str,
+    url: str,
+    page_specifics: dict[str, str] | None = None,
+) -> EbayProductRecord:
     soup = BeautifulSoup(html, "html.parser")
 
     title_el = soup.select_one("h1.x-item-title__mainTitle, h1.it-ttl, #itemTitle, h1")
@@ -297,7 +459,11 @@ def extract_ebay_product_record(html: str, item_id: str, url: str) -> EbayProduc
     )
     price = normalize_whitespace(price_el.get_text()) if price_el else None
 
-    specifics = extract_item_specifics(soup)
+    specifics = merge_specifics(
+        extract_item_specifics(soup),
+        extract_item_specifics_from_json(html),
+        page_specifics or {},
+    )
     identifiers = identifiers_from_specifics(specifics)
     brand = specifics.get("brand", "Renogy")
     model_number = extract_model_number(specifics)
@@ -352,6 +518,44 @@ def extract_ebay_product_record(html: str, item_id: str, url: str) -> EbayProduc
             record.upc = upc_match.group(1)
     if record.ean and not record.gtin:
         record.gtin = record.ean
+
+    return record
+
+
+def scrape_single_ebay_item(
+    page: Page,
+    hit: EbayListingHit,
+    delay: float,
+) -> EbayProductRecord:
+    html = fetch_ebay_page(page, hit.url, delay)
+    page_specifics = extract_item_specifics_from_page(page)
+    record = extract_ebay_product_record(html, hit.item_id, hit.url, page_specifics)
+
+    if record.ean:
+        return record
+
+    variation_ids = extract_variation_ids(html)
+    for variation_id in variation_ids[:6]:
+        variation_url = f"{hit.url.split('?')[0]}?variationId={variation_id}"
+        print(f"  Trying variation {variation_id}", file=sys.stderr)
+        variation_html = fetch_ebay_page(page, variation_url, delay, retries=2)
+        variation_specifics = merge_specifics(
+            page_specifics,
+            extract_item_specifics_from_page(page),
+        )
+        variation_record = extract_ebay_product_record(
+            variation_html,
+            hit.item_id,
+            variation_url,
+            variation_specifics,
+        )
+        if variation_record.ean:
+            if not variation_record.title:
+                variation_record.title = record.title
+            if not variation_record.price:
+                variation_record.price = record.price
+            variation_record.url = hit.url
+            return variation_record
 
     return record
 
@@ -411,8 +615,7 @@ def scrape_ebay_products(
             file=sys.stderr,
         )
         try:
-            html = fetch_ebay_page(page, hit.url, delay)
-            record = extract_ebay_product_record(html, hit.item_id, hit.url)
+            record = scrape_single_ebay_item(page, hit, delay)
             if not record.title:
                 record.title = hit.title
             if not record.price:

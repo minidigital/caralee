@@ -84,7 +84,8 @@ playwright install chromium
 
 ## Notes
 
-- eBay Item specifics often include **MPN** but not always **UPC** — Amazon fallback covers those gaps.
+- eBay Item specifics include a **UPC** field on many Renogy listings (batteries, charge controllers, etc.). Some categories (e.g. solar panels) may omit it. Values of "Does not apply" are skipped.
+- The scraper reads UPC from the Item specifics `dl.ux-labels-values` blocks (scoped to the "About this item" section), with embedded JSON and SKU variation fallbacks.
 - eBay may show a verification page for automated browsers. Increase `--delay` or run with `--headed` if blocked.
 - Amazon may also throttle automated access; the Amazon scraper includes retry logic.
 - Respect eBay and Amazon Terms of Service for your use case.
